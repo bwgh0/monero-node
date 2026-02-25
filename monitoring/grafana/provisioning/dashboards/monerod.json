@@ -1,0 +1,862 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Node Status",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "Syncing" } }, "type": "value" },
+            { "options": { "1": { "text": "Synced" } }, "type": "value" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "yellow", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Sync Status",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_synchronized",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Block Height",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_height",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 86400 },
+              { "color": "red", "value": 604800 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Uptime",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_uptime_seconds_total",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10737418240 },
+              { "color": "red", "value": 5368709120 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 1 },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Free Disk Space",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_free_space_bytes",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "purple", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 1 },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Database Size",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_database_size_bytes",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 1 },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "RPC Connections",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_rpc_connections",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 18, "y": 1 },
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Alt Blocks",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_alternative_blocks",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.99 },
+              { "color": "green", "value": 0.999 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 21, "y": 1 },
+      "id": 8,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "title": "Uptime (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "avg_over_time(up{job=\"monerod\"}[24h])",
+          "legendFormat": "__auto",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Network",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "P2P Connections",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_p2p_connections{type=\"in\"}",
+          "legendFormat": "Inbound",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_p2p_connections{type=\"out\"}",
+          "legendFormat": "Outbound",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "Bps",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Network Traffic",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "rate(monero_net_rx_bytes[5m])",
+          "legendFormat": "RX",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "rate(monero_net_tx_bytes[5m])",
+          "legendFormat": "TX",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Peerlist",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_peerlist{type=\"white\"}",
+          "legendFormat": "White (trusted)",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_peerlist{type=\"gray\"}",
+          "legendFormat": "Gray (unverified)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Block Height",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_height",
+          "legendFormat": "Current",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_target_height",
+          "legendFormat": "Target",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 102,
+      "title": "Blockchain",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 20,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Network Difficulty",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_lastblock_difficulty",
+          "legendFormat": "Difficulty",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 1
+          },
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 21,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Transactions per Block",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_lastblock_transactions",
+          "legendFormat": "Transactions",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "currencyXMR",
+          "decimals": 4,
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+      "id": 22,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Block Reward",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_lastblock_reward_monero",
+          "legendFormat": "Total Reward",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_lastblock_fees_monero",
+          "legendFormat": "Fees",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "decbytes",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+      "id": 23,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Block Size",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_lastblock_size_bytes",
+          "legendFormat": "Block Size",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_block_size_median_bytes",
+          "legendFormat": "Median",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "id": 103,
+      "title": "Transaction Pool",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 40 },
+      "id": 30,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "TX Pool Size",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_transaction_pool_transactions",
+          "legendFormat": "Transactions",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "decbytes",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 40 },
+      "id": 31,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "TX Pool Bytes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_transaction_pool_size_bytes",
+          "legendFormat": "Pool Size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "currencyXMR",
+          "decimals": 6,
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 40 },
+      "id": 32,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "TX Pool Fees",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_transaction_pool_fees_monero",
+          "legendFormat": "Total Fees",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
+      "id": 104,
+      "title": "Disk & Storage",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "decbytes",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "id": 40,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Database Size Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_database_size_bytes",
+          "legendFormat": "Database",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 2
+          },
+          "unit": "decbytes",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "id": 41,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Free Disk Space Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "monero_info_free_space_bytes",
+          "legendFormat": "Free Space",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 },
+      "id": 105,
+      "title": "RPC",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal" }
+          },
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 58 },
+      "id": 50,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "RPC Request Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "topk(10, rate(monero_rpc_hits_total[5m]))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal" }
+          },
+          "unit": "s",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 58 },
+      "id": 51,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "RPC Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "topk(10, rate(monero_rpc_seconds_total[5m]) / rate(monero_rpc_hits_total[5m]))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["monero", "monerod"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "monerod",
+  "uid": "monerod-main",
+  "version": 1
+}

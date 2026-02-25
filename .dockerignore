@@ -1,0 +1,6 @@
+aws/
+.env*
+*.pem
+*.key
+tor-keys/
+.git/

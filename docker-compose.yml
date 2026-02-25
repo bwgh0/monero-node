@@ -1,0 +1,237 @@
+services:
+  monerod:
+    image: ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5
+    container_name: monerod
+    restart: unless-stopped
+    volumes:
+      - bitmonero:/home/monero/.bitmonero
+    command:
+      # Unrestricted RPC on 18081 — internal only (exporter uses this)
+      - --rpc-bind-ip=0.0.0.0
+      - --rpc-bind-port=18081
+      # Restricted RPC on 18089 — public-facing with native TLS
+      - --rpc-restricted-bind-ip=0.0.0.0
+      - --rpc-restricted-bind-port=18089
+      - --confirm-external-bind
+      # Native TLS — autodetect accepts both SSL and plain HTTP connections.
+      # wallet2 and monerod share the same OpenSSL, so TLS always negotiates.
+      # (nginx TLS doesn't work with wallet2 due to OpenSSL version mismatch)
+      - --rpc-ssl=autodetect
+      - --prune-blockchain
+      - --public-node
+      - --out-peers=32
+      - --in-peers=64
+      - --max-connections-per-ip=3
+      - --enable-dns-blocklist
+      - --disable-rpc-ban
+      - --enforce-dns-checkpointing
+      # Privacy hardening
+      - --pad-transactions
+      - --check-updates=disabled
+      # Reduce attack surface — ZMQ not used
+      - --no-zmq
+      # Zero logging
+      - --log-level=0
+      - --max-log-file-size=0
+      - --max-log-files=0
+      # Network
+      - --no-igd
+      - --p2p-bind-ip=0.0.0.0
+      - --p2p-bind-port=18080
+      - --limit-rate-up=128000
+      - --limit-rate-down=128000
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:18081/get_height"]
+      interval: 60s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    ports:
+      - "18080:18080"  # P2P
+      - "443:18089"    # HTTPS — monerod native TLS (wallet clients connect here)
+      - "18089:18089"  # Legacy port — same RPC, kept for existing configs
+    networks:
+      - public
+      - internal
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 256
+    # Note: no-new-privileges omitted — sethsimmons image uses fixuid (setuid)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "1"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/cache/nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot-conf:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    ports:
+      - "80:80"  # Health checks, ACME, Grafana (port 443 is monerod native TLS)
+    depends_on:
+      - monerod
+    networks:
+      - public
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "none"
+
+  certbot:
+    image: certbot/dns-route53:v3.1.0
+    container_name: certbot
+    restart: unless-stopped
+    volumes:
+      - certbot-conf:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+      - ./aws:/root/.aws:ro
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - public
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "none"
+
+  tor:
+    image: goldy/tor-hidden-service:v0.4.7.12-54c0e54
+    container_name: tor
+    restart: unless-stopped
+    environment:
+      # Tor hidden service exposes restricted RPC (monerod:18089)
+      # Tor provides end-to-end encryption so no TLS needed internally
+      MONEROD_TOR_SERVICE_HOSTS: "18089:monerod:18089"
+      MONEROD_TOR_SERVICE_VERSION: "3"
+    volumes:
+      - tor-keys:/var/lib/tor/hidden_service
+    depends_on:
+      - monerod
+    networks:
+      - public
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  node-exporter:
+    image: prom/node-exporter@sha256:065914c03336590ebed517e7df38520f0efb44465fde4123c3f6b7328f5a9396
+    container_name: node-exporter
+    restart: unless-stopped
+    read_only: true
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --no-collector.arp
+      - --no-collector.infiniband
+      - --no-collector.ipvs
+      - --no-collector.nfs
+      - --no-collector.nfsd
+      - --no-collector.tapestats
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "none"
+
+  monero-exporter:
+    image: utxobr/monero-exporter@sha256:737413b1054583535e835e1417b61a8d59a4c08723e4a15c61c4249c2a7d69a4
+    container_name: monero-exporter
+    restart: unless-stopped
+    read_only: true
+    command: ["--monero-addr", "http://monerod:18081"]
+    depends_on:
+      - monerod
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "none"
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=:9091
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - monero-exporter
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "none"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD in .env}
+      - GF_SERVER_ROOT_URL=http://${DOMAIN}/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - internal
+      - public
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "1"
+
+volumes:
+  bitmonero:
+    name: ${MONEROD_VOLUME:-monero-node_bitmonero}
+  certbot-conf:
+  certbot-www:
+  tor-keys:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  # Public network — containers that need external/inter-service access
+  public:
+    driver: bridge
+  # Internal network — monitoring stack only (no external access)
+  # Only monerod is on both networks, so the unrestricted RPC (18081)
+  # is only reachable by monero-exporter and prometheus
+  internal:
+    driver: bridge
+    internal: true
