@@ -104,8 +104,11 @@ if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
         --agree-tos \
         --email "admin@monero.one" \
         --no-eff-email
-    # Make private key readable by monerod (runs as non-root)
-    chmod 644 /etc/letsencrypt/archive/*/privkey*.pem 2>/dev/null || true
+    # Make certs readable by monerod (runs as non-root)
+    docker run --rm --entrypoint sh \
+        -v monero-node_certbot-conf:/etc/letsencrypt \
+        certbot/dns-route53:v3.1.0 \
+        -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
 else
     echo "    TLS certificate already exists for ${DOMAIN}"
 fi
