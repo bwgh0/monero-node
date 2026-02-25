@@ -1,0 +1,105 @@
+name: Deploy monero-node
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Region to deploy"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - eu
+          - us
+
+jobs:
+  deploy-eu:
+    if: >
+      github.event_name == 'push' ||
+      github.event.inputs.region == 'all' ||
+      github.event.inputs.region == 'eu'
+    runs-on: ubuntu-latest
+    environment: production-eu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to EU node
+        uses: appleboy/ssh-action@v1
+        with:
+          host: eu.node.monero.one
+          username: root
+          key: ${{ secrets.SSH_KEY_EU }}
+          script: |
+            cd /opt/monero-node
+
+            # Pull latest config files from repo
+            if [ -d .git ]; then
+              git fetch origin && git reset --hard origin/main
+            else
+              git clone https://github.com/${{ github.repository }}.git tmp && mv tmp/.git .git && rm -rf tmp && git checkout .
+            fi
+
+            # Apply templates from .env values
+            git checkout -- nginx.conf monitoring/grafana/provisioning/alerting/contactpoints.yml
+            sed -i 's/\${DOMAIN}/eu.node.monero.one/g' nginx.conf
+            source .env
+            sed -i "s/\${TELEGRAM_CHAT_ID}/${TELEGRAM_CHAT_ID}/g" monitoring/grafana/provisioning/alerting/contactpoints.yml
+
+            # Pull pinned images and restart
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # Force-recreate containers with bind-mounted configs
+            # (docker restart doesn't pick up new file inodes from git checkout)
+            docker compose up -d --force-recreate nginx prometheus grafana
+
+            # Verify health
+            sleep 5
+            curl -sf http://localhost/health > /dev/null && echo "EU node healthy" || echo "EU node starting up..."
+
+  deploy-us:
+    if: >
+      github.event_name == 'push' ||
+      github.event.inputs.region == 'all' ||
+      github.event.inputs.region == 'us'
+    runs-on: ubuntu-latest
+    environment: production-us
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to US node
+        uses: appleboy/ssh-action@v1
+        with:
+          host: us.node.monero.one
+          username: root
+          key: ${{ secrets.SSH_KEY_US }}
+          script: |
+            cd /opt/monero-node
+
+            # Pull latest config files from repo
+            if [ -d .git ]; then
+              git fetch origin && git reset --hard origin/main
+            else
+              git clone https://github.com/${{ github.repository }}.git tmp && mv tmp/.git .git && rm -rf tmp && git checkout .
+            fi
+
+            # Apply templates from .env values
+            git checkout -- nginx.conf monitoring/grafana/provisioning/alerting/contactpoints.yml
+            sed -i 's/\${DOMAIN}/us.node.monero.one/g' nginx.conf
+            source .env
+            sed -i "s/\${TELEGRAM_CHAT_ID}/${TELEGRAM_CHAT_ID}/g" monitoring/grafana/provisioning/alerting/contactpoints.yml
+
+            # Pull pinned images and restart
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # Force-recreate containers with bind-mounted configs
+            # (docker restart doesn't pick up new file inodes from git checkout)
+            docker compose up -d --force-recreate nginx prometheus grafana
+
+            # Verify health
+            sleep 5
+            curl -sf http://localhost/health > /dev/null && echo "US node healthy" || echo "US node starting up..."

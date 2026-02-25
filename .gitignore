@@ -1,0 +1,9 @@
+.env*
+!.env.example
+*.log
+*.pem
+*.key
+*.bak
+tor-keys/
+docker-compose.override.yml
+aws/
