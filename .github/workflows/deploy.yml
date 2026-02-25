@@ -48,13 +48,17 @@ jobs:
             source .env
             sed -i "s/\${TELEGRAM_CHAT_ID}/${TELEGRAM_CHAT_ID}/g" monitoring/grafana/provisioning/alerting/contactpoints.yml
 
+            # Ensure private key is readable by monerod (runs as non-root)
+            chmod 644 /etc/letsencrypt/archive/*/privkey*.pem 2>/dev/null || true
+
             # Pull pinned images and restart
             docker compose pull
             docker compose up -d --remove-orphans
 
             # Force-recreate containers with bind-mounted configs
             # (docker restart doesn't pick up new file inodes from git checkout)
-            docker compose up -d --force-recreate nginx prometheus grafana
+            # monerod included to pick up any renewed TLS certs
+            docker compose up -d --force-recreate nginx prometheus grafana monerod
 
             # Verify health
             sleep 5
@@ -92,13 +96,17 @@ jobs:
             source .env
             sed -i "s/\${TELEGRAM_CHAT_ID}/${TELEGRAM_CHAT_ID}/g" monitoring/grafana/provisioning/alerting/contactpoints.yml
 
+            # Ensure private key is readable by monerod (runs as non-root)
+            chmod 644 /etc/letsencrypt/archive/*/privkey*.pem 2>/dev/null || true
+
             # Pull pinned images and restart
             docker compose pull
             docker compose up -d --remove-orphans
 
             # Force-recreate containers with bind-mounted configs
             # (docker restart doesn't pick up new file inodes from git checkout)
-            docker compose up -d --force-recreate nginx prometheus grafana
+            # monerod included to pick up any renewed TLS certs
+            docker compose up -d --force-recreate nginx prometheus grafana monerod
 
             # Verify health
             sleep 5

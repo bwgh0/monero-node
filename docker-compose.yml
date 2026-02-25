@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     volumes:
       - bitmonero:/home/monero/.bitmonero
+      - certbot-conf:/etc/letsencrypt:ro
     command:
       # Unrestricted RPC on 18081 — internal only (exporter uses this)
       - --rpc-bind-ip=0.0.0.0
@@ -13,10 +14,12 @@ services:
       - --rpc-restricted-bind-ip=0.0.0.0
       - --rpc-restricted-bind-port=18089
       - --confirm-external-bind
-      # Native TLS — autodetect accepts both SSL and plain HTTP connections.
+      # Native TLS with Let's Encrypt cert (same approach as Cake Wallet's node).
+      # monerod's Epee HTTP server handles TLS directly — no nginx proxy needed.
       # wallet2 and monerod share the same OpenSSL, so TLS always negotiates.
-      # (nginx TLS doesn't work with wallet2 due to OpenSSL version mismatch)
       - --rpc-ssl=autodetect
+      - --rpc-ssl-private-key=/etc/letsencrypt/live/${DOMAIN}/privkey.pem
+      - --rpc-ssl-certificate=/etc/letsencrypt/live/${DOMAIN}/fullchain.pem
       - --prune-blockchain
       - --public-node
       - --out-peers=32
@@ -95,7 +98,7 @@ services:
       - certbot-conf:/etc/letsencrypt
       - certbot-www:/var/www/certbot
       - ./aws:/root/.aws:ro
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --deploy-hook \"chmod 644 /etc/letsencrypt/archive/*/privkey*.pem\"; sleep 12h & wait $${!}; done;'"
     networks:
       - public
     security_opt:
