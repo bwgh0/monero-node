@@ -152,6 +152,7 @@ groups:
       - uid: alert-node-behind
         title: Node Falling Behind
         condition: C
+        noDataState: OK
         data:
           - refId: A
             relativeTimeRange:
@@ -159,7 +160,9 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              expr: monero_info_target_height - monero_info_height
+              # Only evaluate when target_height > 0 (node is actively syncing).
+              # When synced, target_height = 0 so this returns empty — handled by noDataState: OK.
+              expr: (monero_info_target_height - monero_info_height) and monero_info_target_height > 0
               refId: A
           - refId: B
             datasourceUid: __expr__
