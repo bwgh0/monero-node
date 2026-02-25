@@ -94,6 +94,22 @@ cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
 # Substitute domain in nginx.conf
 sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf"
 
+# Generate initial Let's Encrypt cert (monerod loads it for native TLS)
+if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
+    echo "==> Generating initial TLS certificate via DNS-01..."
+    docker compose run --rm certbot certbot certonly \
+        --dns-route53 \
+        -d "${DOMAIN}" \
+        --non-interactive \
+        --agree-tos \
+        --email "admin@monero.one" \
+        --no-eff-email
+    # Make private key readable by monerod (runs as non-root)
+    chmod 644 /etc/letsencrypt/archive/*/privkey*.pem 2>/dev/null || true
+else
+    echo "    TLS certificate already exists for ${DOMAIN}"
+fi
+
 docker compose up -d
 
 echo "==> Waiting for services to start..."
