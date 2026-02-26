@@ -24,7 +24,7 @@ services:
       - --public-node
       - --out-peers=32
       - --in-peers=64
-      - --max-connections-per-ip=3
+      - --max-connections-per-ip=8
       - --enable-dns-blocklist
       - --ban-list=/home/monero/ban_list.txt
       - --disable-rpc-ban
