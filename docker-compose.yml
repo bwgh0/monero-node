@@ -156,12 +156,12 @@ services:
     logging:
       driver: "none"
 
-  monero-exporter:
-    image: utxobr/monero-exporter@sha256:737413b1054583535e835e1417b61a8d59a4c08723e4a15c61c4249c2a7d69a4
-    container_name: monero-exporter
+  monerod-rpc-proxy:
+    image: alpine/socat:1.8.0.1
+    container_name: monerod-rpc-proxy
     restart: unless-stopped
     read_only: true
-    command: ["--monero-addr", "http://monerod:18081"]
+    command: ["TCP-LISTEN:18081,fork,reuseaddr", "TCP:monerod:18081"]
     depends_on:
       - monerod
     networks:
@@ -170,6 +170,25 @@ services:
       - no-new-privileges:true
     logging:
       driver: "none"
+
+  monero-exporter:
+    image: utxobr/monero-exporter@sha256:737413b1054583535e835e1417b61a8d59a4c08723e4a15c61c4249c2a7d69a4
+    container_name: monero-exporter
+    restart: unless-stopped
+    read_only: true
+    command: ["--monero-addr", "http://monerod-rpc-proxy:18081"]
+    dns: 127.0.0.11
+    depends_on:
+      - monerod-rpc-proxy
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
 
   prometheus:
     image: prom/prometheus:v3.2.1
