@@ -157,11 +157,16 @@ services:
       driver: "none"
 
   monerod-rpc-proxy:
-    image: alpine/socat:1.8.0.1
+    image: nginx:1.27-alpine
     container_name: monerod-rpc-proxy
     restart: unless-stopped
     read_only: true
-    command: ["TCP-LISTEN:18081,fork,reuseaddr", "TCP:monerod:18081"]
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/cache/nginx
+    volumes:
+      - ./monitoring/rpc-proxy.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - monerod
     networks:
