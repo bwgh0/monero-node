@@ -17,7 +17,7 @@ services:
       # Native TLS with Let's Encrypt cert (same approach as Cake Wallet's node).
       # monerod's Epee HTTP server handles TLS directly — no nginx proxy needed.
       # wallet2 and monerod share the same OpenSSL, so TLS always negotiates.
-      - --rpc-ssl=autodetect
+      - --rpc-ssl=enabled
       - --rpc-ssl-private-key=/etc/letsencrypt/live/${DOMAIN}/privkey.pem
       - --rpc-ssl-certificate=/etc/letsencrypt/live/${DOMAIN}/fullchain.pem
       - --prune-blockchain
@@ -45,7 +45,7 @@ services:
       - --limit-rate-up=128000
       - --limit-rate-down=128000
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:18081/get_height"]
+      test: ["CMD", "curl", "--fail", "--insecure", "https://localhost:18081/get_height"]
       interval: 60s
       timeout: 5s
       retries: 10
