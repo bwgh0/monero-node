@@ -62,7 +62,7 @@ jobs:
             # Force-recreate containers with bind-mounted configs
             # (docker restart doesn't pick up new file inodes from git checkout)
             # monerod included to pick up any renewed TLS certs
-            docker compose up -d --force-recreate nginx prometheus grafana monerod monero-exporter
+            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter
 
             # Verify health
             sleep 10
@@ -114,7 +114,7 @@ jobs:
             # Force-recreate containers with bind-mounted configs
             # (docker restart doesn't pick up new file inodes from git checkout)
             # monerod included to pick up any renewed TLS certs
-            docker compose up -d --force-recreate nginx prometheus grafana monerod monero-exporter
+            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter
 
             # Verify health
             sleep 10
