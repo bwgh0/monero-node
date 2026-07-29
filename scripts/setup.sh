@@ -113,6 +113,12 @@ else
     echo "    TLS certificate already exists for ${DOMAIN}"
 fi
 
+# Install cert-reload cron — monerod never re-reads TLS certs after startup,
+# so a renewed cert must trigger a container restart or it expires in RAM
+echo "==> Installing cert-reload cron..."
+cp "${SCRIPT_DIR}/scripts/cert-reload.sh" /etc/cron.daily/monerod-cert-reload
+chmod 755 /etc/cron.daily/monerod-cert-reload
+
 docker compose up -d
 
 echo "==> Waiting for services to start..."
