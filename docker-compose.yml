@@ -34,10 +34,10 @@ services:
       - --check-updates=disabled
       # Reduce attack surface — ZMQ not used
       - --no-zmq
-      # Zero logging
+      # Minimal logging with rotation (size 0 = unlimited; a 0-cap log once grew to 11G)
       - --log-level=0
-      - --max-log-file-size=0
-      - --max-log-files=0
+      - --max-log-file-size=104857600
+      - --max-log-files=2
       # Network
       - --no-igd
       - --p2p-bind-ip=0.0.0.0
