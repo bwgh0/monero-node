@@ -206,6 +206,8 @@ services:
       - --no-collector.nfs
       - --no-collector.nfsd
       - --no-collector.tapestats
+      # Container state from scripts/docker-metrics.sh (cron, every minute)
+      - --collector.textfile.directory=/host/root/var/lib/node-exporter/textfile
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -248,6 +250,68 @@ services:
       - monerod-rpc-proxy
     networks:
       - internal
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  tor-client:
+    # SOCKS proxy for the onion probes in blackbox. It is separate from the
+    # tor service, so a stuck onion service cannot hide its own outage.
+    image: btcpayserver/tor:0.4.9.12-1@sha256:2086f5447b897cc6ba57d0dd28d0d60a88911d5960363ad17732517b2af67e53
+    container_name: tor-client
+    restart: unless-stopped
+    user: "104:107"
+    read_only: true
+    entrypoint: ["/usr/bin/tor"]
+    command:
+      # No torrc file. Every option is a flag below.
+      - --ignore-missing-torrc
+      - -f
+      - /nonexistent/torrc
+      - --defaults-torrc
+      - /nonexistent/torrc-defaults
+      - --Log
+      - notice stdout
+      - --DataDirectory
+      - /run/tor/data
+      # For other containers only. No host port is published.
+      - --SocksPort
+      - 0.0.0.0:9050
+      - --SocksPolicy
+      - accept private:*,reject *
+    tmpfs:
+      - /run/tor:uid=104,gid=107,mode=0700
+    networks:
+      - public
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  blackbox:
+    # Probes both nodes from this box: RPC and served certs on 443 and 18089,
+    # both onions over Tor, and both Grafanas. See monitoring/blackbox.yml.
+    image: prom/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc
+    container_name: blackbox
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    volumes:
+      - ./monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    depends_on:
+      - tor-client
+    networks:
+      - public    # the probes need the internet
+      - internal  # Prometheus scrapes it here
     security_opt:
       - no-new-privileges:true
     logging:

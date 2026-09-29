@@ -91,6 +91,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cp "${SCRIPT_DIR}/docker-compose.yml" "${APP_DIR}/"
 cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
 cp "${SCRIPT_DIR}/onion-proxy.conf" "${APP_DIR}/"
+cp -r "${SCRIPT_DIR}/monitoring" "${SCRIPT_DIR}/scripts" "${APP_DIR}/"
 
 # Substitute domain in nginx.conf
 sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf"
@@ -119,6 +120,11 @@ fi
 echo "==> Installing cert-reload cron..."
 cp "${SCRIPT_DIR}/scripts/cert-reload.sh" /etc/cron.daily/monerod-cert-reload
 chmod 755 /etc/cron.daily/monerod-cert-reload
+
+# Container state metrics for the Grafana container alerts
+echo "==> Installing docker-metrics cron..."
+install -d -m 755 /var/lib/node-exporter/textfile
+install -m 644 "${SCRIPT_DIR}/scripts/docker-metrics.cron" /etc/cron.d/monero-node-docker-metrics
 
 # Tor runs as uid 104. That uid owns the onion keys on the existing boxes.
 # A new tor-keys volume belongs to root, so give it to uid 104 first.

@@ -10,3 +10,90 @@ scrape_configs:
   - job_name: "node"
     static_configs:
       - targets: ["node-exporter:9100"]
+
+  - job_name: "blackbox"
+    static_configs:
+      - targets: ["blackbox:9115"]
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9091"]
+
+  # Probes run in blackbox (see blackbox.yml). Both boxes probe both nodes,
+  # so each box also watches its peer. The "node" label names the target.
+
+  # Restricted RPC over clearnet TLS on 443 and 18089. Also gives the
+  # expiry of the cert each port serves.
+  - job_name: "rpc"
+    metrics_path: /probe
+    params:
+      module: [rpc_https]
+    scrape_interval: 1m
+    scrape_timeout: 30s
+    static_configs:
+      - targets:
+          - https://us.node.monero.one/get_height
+          - https://us.node.monero.one:18089/get_height
+        labels:
+          node: us
+      - targets:
+          - https://eu.node.monero.one/get_height
+          - https://eu.node.monero.one:18089/get_height
+        labels:
+          node: eu
+    relabel_configs: &probe_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # Both onions over plain HTTP through Tor, the way the apps connect
+  - job_name: "onion"
+    metrics_path: /probe
+    params:
+      module: [onion_http]
+    scrape_interval: 2m
+    scrape_timeout: 100s
+    static_configs:
+      - targets: ["http://5tvl5acn3sm7id4gzc4mj6n7lrwlyrhssr2r57zkxk6eugxwix4ze4qd.onion:18089/get_height"]
+        labels:
+          node: us
+      - targets: ["http://zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion:18089/get_height"]
+        labels:
+          node: eu
+    relabel_configs: *probe_relabel
+
+  # Both onions over TLS through Tor
+  - job_name: "onion-tls"
+    metrics_path: /probe
+    params:
+      module: [onion_https]
+    scrape_interval: 2m
+    scrape_timeout: 100s
+    static_configs:
+      - targets: ["https://5tvl5acn3sm7id4gzc4mj6n7lrwlyrhssr2r57zkxk6eugxwix4ze4qd.onion:18089/get_height"]
+        labels:
+          node: us
+      - targets: ["https://zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion:18089/get_height"]
+        labels:
+          node: eu
+    relabel_configs: *probe_relabel
+
+  # Grafana on both boxes. A box whose Grafana is down sends no alerts,
+  # so its peer has to notice.
+  - job_name: "grafana"
+    metrics_path: /probe
+    params:
+      module: [grafana_health]
+    scrape_interval: 1m
+    scrape_timeout: 30s
+    static_configs:
+      - targets: ["http://us.node.monero.one/grafana/api/health"]
+        labels:
+          node: us
+      - targets: ["http://eu.node.monero.one/grafana/api/health"]
+        labels:
+          node: eu
+    relabel_configs: *probe_relabel

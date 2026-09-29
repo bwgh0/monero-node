@@ -221,3 +221,225 @@ groups:
           summary: "System metrics exporter is down"
         labels:
           severity: critical
+
+      - uid: alert-exporter-blind
+        title: Monero Exporter Blind
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Up is 1 even when the exporter cannot reach monerod, so count the
+              # monerod series instead. vector(0) keeps the result from going empty.
+              expr: count(monero_info_height{job="monerod"}) or vector(0)
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "monero-exporter gets no data from monerod"
+          description: "No monerod metrics for 10 minutes, so Node Falling Behind, Node Height Stale and the dashboards are blind. Check that monerod runs: docker compose ps monerod. A known cause is monerod refusing new connections from the monerod-rpc-proxy IP on 18081. Fix: docker compose restart monerod."
+        labels:
+          severity: critical
+
+      - uid: alert-height-stale
+        title: Node Height Stale
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # No data is covered by Monero Exporter Blind
+              expr: changes(monero_info_height{job="monerod"}[30m])
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "monerod height has not moved for 40 minutes"
+          description: "A block comes about every 2 minutes. The node may be stuck or cut off from peers. Check docker logs --tail 50 monerod and the P2P peer count."
+        labels:
+          severity: critical
+
+      - uid: alert-not-synced
+        title: Node Not Synchronized
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: monero_info_synchronized{job="monerod"}
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 30m
+        annotations:
+          summary: "monerod reports it is not synchronized"
+          description: "Wallets get old data while the node syncs. After a restart this clears in minutes. If it lasts, compare the height with the other node and check peers and disk."
+        labels:
+          severity: critical
+
+      - uid: alert-peers-low
+        title: P2P Peers Low
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: sum(monero_p2p_connections{job="monerod", state="normal"})
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [8]
+              refId: C
+        for: 15m
+        annotations:
+          summary: 'monerod has {{ printf "%.0f" .Values.B.Value }} P2P peers'
+          description: "The node normally keeps 32 outgoing peers. Check the network and port 18080, then docker logs --tail 50 monerod."
+        labels:
+          severity: warning
+
+      - uid: alert-disk-warning
+        title: Disk Usage Warning
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: 1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+              refId: C
+        for: 30m
+        annotations:
+          summary: "Disk usage above 80%"
+          description: "Disk Usage Critical fires at 85%. Find the space with docker system df and du -sh /var/lib/docker/volumes/*. Remove dangling images with docker image prune."
+        labels:
+          severity: warning
+
+      - uid: alert-scrape-down
+        title: Scrape Target Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: up{job=~"blackbox|prometheus"}
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "Prometheus cannot scrape {{ .Labels.job }}"
+          description: "While blackbox is down, the onion, RPC, cert and Grafana probes are blind. Check docker compose ps blackbox tor-client prometheus."
+        labels:
+          severity: warning

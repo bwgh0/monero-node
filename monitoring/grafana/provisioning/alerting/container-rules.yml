@@ -1,0 +1,161 @@
+apiVersion: 1
+
+# Container alerts. Data comes from scripts/docker-metrics.sh, which cron
+# runs every minute and node-exporter reads as a textfile.
+
+groups:
+  - orgId: 1
+    name: container-alerts
+    folder: alerts
+    interval: 1m
+    rules:
+      - uid: alert-container-down
+        title: Container Down
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: docker_container_running
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "Container {{ .Labels.name }} is not running"
+          description: "Check docker compose ps -a and docker logs --tail 50 {{ .Labels.name }}. Start it with docker compose up -d {{ .Labels.name }}."
+        labels:
+          severity: critical
+
+      - uid: alert-container-crashed
+        title: Container Crashed
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # RestartCount goes up only for restarts by the restart policy,
+              # not for docker restart or a deploy.
+              expr: increase(docker_container_restart_count[15m])
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 0s
+        annotations:
+          summary: "Container {{ .Labels.name }} crashed and Docker restarted it"
+          description: "Repeat alerts mean a crash loop. Check docker logs --tail 100 {{ .Labels.name }} and docker inspect {{ .Labels.name }} (State.OOMKilled, State.ExitCode)."
+        labels:
+          severity: warning
+
+      - uid: alert-container-unhealthy
+        title: Container Unhealthy
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: docker_container_unhealthy
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "Container {{ .Labels.name }} fails its healthcheck"
+          description: "The monerod healthcheck calls get_height on 18081 inside the container. Check docker logs --tail 50 {{ .Labels.name }}."
+        labels:
+          severity: warning
+
+      - uid: alert-container-metrics-stale
+        title: Container Metrics Stale
+        condition: C
+        noDataState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # No data means the file is missing, so that alerts too
+              expr: time() - docker_metrics_last_run_timestamp_seconds
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [300]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "Container state metrics are stale"
+          description: "The cron job /etc/cron.d/monero-node-docker-metrics has not updated /var/lib/node-exporter/textfile/docker.prom, so the container alerts are blind. Run bash /opt/monero-node/scripts/docker-metrics.sh by hand to see the error."
+        labels:
+          severity: warning

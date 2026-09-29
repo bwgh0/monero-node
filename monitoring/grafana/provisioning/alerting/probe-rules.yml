@@ -1,0 +1,200 @@
+apiVersion: 1
+
+# Probe alerts. Both boxes probe both nodes (see prometheus.yml), so an
+# outage alerts from both boxes. The Source link in each message shows
+# which box sent it. If only one box alerts about the other, check the
+# network path between them first.
+
+groups:
+  - orgId: 1
+    name: probe-alerts
+    folder: alerts
+    interval: 1m
+    rules:
+      - uid: alert-onion-down
+        title: Onion Down
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # 0 when no probe passed in the last 15 minutes. Tor probes fail now and
+              # then, so a single failure never alerts.
+              expr: max_over_time(probe_success{job="onion"}[15m])
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "{{ .Labels.node }} onion fails over plain HTTP"
+          description: "No probe got a status OK reply from {{ .Labels.instance }} in 25 minutes. Apps that use this onion cannot sync. On the {{ .Labels.node }} box check docker compose ps tor onion-proxy monerod and docker logs --tail 50 tor. A restart keeps the onion address: docker compose restart tor. If both onions fail from one box only, the tor-client on that box is stuck: docker compose restart tor-client."
+        labels:
+          severity: critical
+
+      - uid: alert-onion-tls-down
+        title: Onion TLS Down
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max_over_time(probe_success{job="onion-tls"}[15m])
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "{{ .Labels.node }} onion fails over TLS"
+          description: "No probe got a status OK reply from {{ .Labels.instance }} in 25 minutes. Clients that use https with this onion fail. If plain HTTP works, check docker logs onion-proxy on the {{ .Labels.node }} box."
+        labels:
+          severity: warning
+
+      - uid: alert-rpc-down
+        title: RPC Endpoint Down
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max_over_time(probe_success{job="rpc"}[5m])
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "{{ .Labels.instance }} fails"
+          description: "No status OK reply for 10 minutes. Wallets cannot use this node on clearnet. An expired or wrong cert also fails this probe. On the {{ .Labels.node }} box check docker compose ps monerod and docker logs --tail 50 monerod."
+        labels:
+          severity: critical
+
+      - uid: alert-cert-expiring
+        title: TLS Cert Expiring
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Days left on the cert that each port serves
+              expr: (probe_ssl_earliest_cert_expiry{job="rpc"} - time()) / 86400
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [21]
+              refId: C
+        for: 1h
+        annotations:
+          summary: '{{ .Labels.instance }} serves a cert that expires in {{ printf "%.0f" .Values.B.Value }} days'
+          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod to load the new cert. On the {{ .Labels.node }} box check docker logs certbot and run that cron script by hand."
+        labels:
+          severity: warning
+
+      - uid: alert-grafana-down
+        title: Grafana Unreachable
+        condition: C
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max_over_time(probe_success{job="grafana"}[10m])
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "Grafana on {{ .Labels.node }} does not answer"
+          description: "That box sends no alerts while its Grafana is down. Try ssh root@{{ .Labels.node }}.node.monero.one and docker compose ps. If ssh fails, the box itself is down."
+        labels:
+          severity: critical

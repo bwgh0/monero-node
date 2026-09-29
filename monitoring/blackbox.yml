@@ -1,0 +1,57 @@
+# blackbox_exporter modules. Prometheus sends the targets (see prometheus.yml).
+# Every monerod probe needs a 200 reply with "status": "OK" in the body.
+
+modules:
+  # Restricted RPC over clearnet TLS. The cert must be valid for the name.
+  # A pass also exports probe_ssl_earliest_cert_expiry for the served cert.
+  rpc_https:
+    prober: http
+    timeout: 20s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      fail_if_body_not_matches_regexp:
+        - '"status"\s*:\s*"OK"'
+
+  # Onion over plain HTTP, the way the apps connect. Goes through the
+  # tor-client SOCKS proxy. Tor resolves the .onion name, not blackbox.
+  onion_http:
+    prober: http
+    timeout: 90s
+    http:
+      method: GET
+      proxy_url: socks5://tor-client:9050
+      skip_resolve_phase_with_proxy: true
+      valid_status_codes: [200]
+      fail_if_ssl: true
+      fail_if_body_not_matches_regexp:
+        - '"status"\s*:\s*"OK"'
+
+  # Onion over TLS. The cert names the clearnet domain, not the onion,
+  # so it is not verified here.
+  onion_https:
+    prober: http
+    timeout: 90s
+    http:
+      method: GET
+      proxy_url: socks5://tor-client:9050
+      skip_resolve_phase_with_proxy: true
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      tls_config:
+        insecure_skip_verify: true
+      fail_if_body_not_matches_regexp:
+        - '"status"\s*:\s*"OK"'
+
+  # Grafana health through nginx on port 80
+  grafana_health:
+    prober: http
+    timeout: 20s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      fail_if_body_not_matches_regexp:
+        - '"database"\s*:\s*"ok"'

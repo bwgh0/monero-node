@@ -55,6 +55,10 @@ jobs:
               certbot/dns-route53:v3.1.0 \
               -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
 
+            # Container state metrics for the Grafana container alerts
+            install -d -m 755 /var/lib/node-exporter/textfile
+            install -m 644 scripts/docker-metrics.cron /etc/cron.d/monero-node-docker-metrics
+
             # Pull pinned images and restart
             docker compose pull
             docker compose up -d --remove-orphans
@@ -62,7 +66,7 @@ jobs:
             # Force-recreate containers with bind-mounted configs
             # (docker restart doesn't pick up new file inodes from git checkout)
             # monerod included to pick up any renewed TLS certs
-            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter onion-proxy
+            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter onion-proxy blackbox
 
             # Verify health
             sleep 10
@@ -107,6 +111,10 @@ jobs:
               certbot/dns-route53:v3.1.0 \
               -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
 
+            # Container state metrics for the Grafana container alerts
+            install -d -m 755 /var/lib/node-exporter/textfile
+            install -m 644 scripts/docker-metrics.cron /etc/cron.d/monero-node-docker-metrics
+
             # Pull pinned images and restart
             docker compose pull
             docker compose up -d --remove-orphans
@@ -114,7 +122,7 @@ jobs:
             # Force-recreate containers with bind-mounted configs
             # (docker restart doesn't pick up new file inodes from git checkout)
             # monerod included to pick up any renewed TLS certs
-            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter onion-proxy
+            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter onion-proxy blackbox
 
             # Verify health
             sleep 10
