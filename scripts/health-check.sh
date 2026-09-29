@@ -5,7 +5,8 @@ set -euo pipefail
 # Returns 0 if healthy, 1 if unhealthy, 2 if syncing
 # Usage: ./health-check.sh [url]
 
-URL="${1:-https://localhost/health}"
+# Port 80 is nginx. Port 443 is monerod itself, which has no /health.
+URL="${1:-http://localhost/health}"
 
 response=$(curl -sfk --max-time 10 "${URL}" 2>/dev/null) || {
     echo "UNHEALTHY: Cannot reach monerod at ${URL}"

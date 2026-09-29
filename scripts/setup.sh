@@ -90,6 +90,7 @@ cd "${APP_DIR}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cp "${SCRIPT_DIR}/docker-compose.yml" "${APP_DIR}/"
 cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
+cp "${SCRIPT_DIR}/onion-proxy.conf" "${APP_DIR}/"
 
 # Substitute domain in nginx.conf
 sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf"

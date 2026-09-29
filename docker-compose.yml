@@ -28,6 +28,10 @@ services:
       - --enable-dns-blocklist
       - --ban-list=/home/monero/ban_list.txt
       - --disable-rpc-ban
+      # All onion traffic reaches monerod from the onion-proxy IP, and the
+      # exporter from the rpc-proxy IP. Default per private IP is 25.
+      # Must stay at or below --rpc-max-connections (default 100).
+      - --rpc-max-connections-per-private-ip=50
       - --enforce-dns-checkpointing
       # Privacy hardening
       - --pad-transactions
@@ -133,21 +137,52 @@ services:
       - /run/tor/data
       - --SocksPort
       - "0"
-      # Onion service exposes the restricted RPC (monerod:18089)
+      # Onion port 18089 goes to onion-proxy over a unix socket. Tor resolves
+      # a host name only once at start, so a socket path is used instead.
       - --HiddenServiceDir
       - /var/lib/tor/hidden_service/monerod
       - --HiddenServicePort
-      - 18089 monerod:18089
+      - 18089 unix:/run/onion/monerod.sock
     tmpfs:
       - /run/tor:uid=104,gid=107,mode=0700
     volumes:
       - tor-keys:/var/lib/tor/hidden_service
+      - onion-sock:/run/onion
     depends_on:
-      - monerod
+      - onion-proxy
     networks:
       - public
     cap_drop:
       - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  onion-proxy:
+    # Bridge between the onion and monerod. Plain HTTP and TLS clients both
+    # work. It reaches only the restricted RPC (monerod:18089). No host port.
+    # See onion-proxy.conf.
+    image: nginx:1.27-alpine
+    container_name: onion-proxy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/cache/nginx
+    # A socket file left from the last run makes bind() fail, so remove it
+    entrypoint: ["/bin/sh", "-c", "rm -f /run/onion/monerod.sock && exec nginx -g 'daemon off;'"]
+    volumes:
+      - ./onion-proxy.conf:/etc/nginx/nginx.conf:ro
+      - onion-sock:/run/onion
+    depends_on:
+      - monerod
+    networks:
+      - internal
     security_opt:
       - no-new-privileges:true
     logging:
@@ -276,6 +311,7 @@ volumes:
   certbot-conf:
   certbot-www:
   tor-keys:
+  onion-sock:
   prometheus-data:
   grafana-data:
 
