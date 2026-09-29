@@ -119,6 +119,13 @@ echo "==> Installing cert-reload cron..."
 cp "${SCRIPT_DIR}/scripts/cert-reload.sh" /etc/cron.daily/monerod-cert-reload
 chmod 755 /etc/cron.daily/monerod-cert-reload
 
+# Tor runs as uid 104. That uid owns the onion keys on the existing boxes.
+# A new tor-keys volume belongs to root, so give it to uid 104 first.
+# This touches only the volume root, never the keys inside it.
+docker compose run --rm --no-deps --user 0:0 --cap-add CHOWN --cap-add FOWNER \
+    --entrypoint /bin/sh tor \
+    -c 'chown 104:107 /var/lib/tor/hidden_service && chmod 700 /var/lib/tor/hidden_service'
+
 docker compose up -d
 
 echo "==> Waiting for services to start..."
