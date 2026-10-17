@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """External watchdog for both boxes.
 
-GitHub Actions runs it every 10 minutes (.github/workflows/watchdog.yml).
+GitHub Actions runs it every 10 minutes (.github/workflows/watchdog.yml),
+when an AWS EventBridge rule dispatches the workflow (scripts/watchdog-clock.sh).
 From outside, it checks on each box: get_info over TLS on the public RPC
 ports, whether the height is current, Grafana /api/health, and the onion
 over Tor (plain HTTP and TLS). A check fails only when it fails for about
@@ -50,7 +51,7 @@ CONTROL_URL = os.environ.get("WATCHDOG_CONTROL_URL", "https://api.github.com")
 BUDGET = float(os.environ.get("WATCHDOG_BUDGET", "120"))  # seconds of tries per check
 RETRY_WAIT = float(os.environ.get("WATCHDOG_RETRY_WAIT", "15"))
 TOR_WAIT = 150  # seconds for Tor on the runner to bootstrap
-REMIND = 4 * 3600 - 300  # a scheduled run can start some minutes early or late
+REMIND = 4 * 3600 - 300  # a run can start some minutes early or late
 GRAFANA_GRACE = 30 * 60  # the other box alerts first; the watchdog after this
 HEIGHT_LAG = 10  # blocks behind the other box
 HEIGHT_STALE = 60 * 60  # seconds with no new block; a block comes about every 2 minutes

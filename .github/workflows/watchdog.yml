@@ -7,15 +7,18 @@ name: Watchdog
 # run to run as an artifact. Telegram is on only when the repository variable
 # WATCHDOG_LIVE is 1. Else each run writes its result to the job summary.
 #
-# GitHub turns off the schedules of a public repo after 60 days without a
-# commit. The weekly keepalive job turns this workflow on again, which
-# starts the 60 days again.
+# The clock is outside GitHub: an AWS EventBridge rule sends a
+# workflow_dispatch event every 10 minutes (scripts/watchdog-clock.sh,
+# "The clock" in docs/monitoring.md). The reason: GitHub started 0 scheduled
+# runs of this workflow in the first hours on main, with 2 cron forms, and
+# community reports since 2026-08-26 tell of scheduled runs that GitHub
+# drops or starts hours late. A dispatch starts at once.
+#
+# GitHub turns off a workflow after 60 days with no commit only when the
+# workflow has a schedule, so this workflow has no keepalive job. When the
+# clock stops or the runs fail, the boxes send Watchdog Silent after 40
+# minutes (alerting/probe-rules.yml).
 on:
-  schedule:
-    # Every 10 minutes, away from the busy start of the hour. GitHub started
-    # no run of "3-59/10" in 2 h, so the minutes are listed one by one.
-    - cron: "3,13,23,33,43,53 * * * *"
-    - cron: "41 7 * * 1"  # keepalive
   workflow_dispatch:
 
 permissions:
@@ -28,7 +31,6 @@ concurrency:
 
 jobs:
   check:
-    if: github.event.schedule != '41 7 * * 1'
     runs-on: ubuntu-24.04
     timeout-minutes: 9
     permissions:
@@ -82,16 +84,3 @@ jobs:
           path: state/watchdog-state.json
           retention-days: 3
           if-no-files-found: ignore
-
-  keepalive:
-    if: github.event.schedule == '41 7 * * 1' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: write  # to turn on the workflow
-    steps:
-      - name: Turn on this workflow again
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: gh api -X PUT "repos/$REPO/actions/workflows/watchdog.yml/enable"
