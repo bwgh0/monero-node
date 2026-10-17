@@ -264,9 +264,13 @@ Capacity Digest Missing fires when the digest did not finish in 8 days.
 docker-compose.yml and for the GitHub Actions. Nothing merges on its own. CI
 runs on each PR, and a merge to main deploys to both boxes.
 
-- The minor and patch updates of the monitoring images (prometheus, grafana,
+- The minor and patch updates of the monitoring images (prometheus,
   blackbox-exporter, node-exporter, monero-exporter) come in one PR.
-- Each other image comes in its own PR. monerod is never in a group.
+- Each other image comes in its own PR. monerod and grafana are never in a
+  group.
+- nginx stays on a stable line (an even minor, such as 1.30). Dependabot
+  ignores the mainline minor 1.31. When Dependabot offers a new odd minor,
+  add it to the ignore list in `.github/dependabot.yml`.
 - Only a monerod bump skips the automatic rollback of the deploy (deploy.sh
   exit 5), because the bitmonero volume holds the chain. A person must check a
   monerod PR.
