@@ -356,9 +356,11 @@ record "I new fault: the rpc proxy check regressed, rolled back to H, the proxy 
 step "case M: a new monerod image that never starts rolls back, because its data is as before"
 t0=$SECONDS
 good=$sha
-# A copy of the monerod image whose entrypoint does not exist
+# A copy of the monerod image with a user that does not exist in it. The
+# start fails, so the container stays "created". (A new ENTRYPOINT in the
+# image would not work: ci/docker-compose.ci.yml sets the entrypoint.)
 docker create --name mnsim-broken-monerod "$monerod_image" >/dev/null
-docker commit --change 'ENTRYPOINT ["/sim-no-monerod"]' mnsim-broken-monerod "$broken_monerod" >/dev/null
+docker commit --change 'USER sim-no-user' mnsim-broken-monerod "$broken_monerod" >/dev/null
 docker rm -v mnsim-broken-monerod >/dev/null
 sha=$(change_from "$good" "a new monerod image that cannot start" sed -i "s|image: $monerod_image|image: $broken_monerod|" docker-compose.yml)
 [[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c "image: $broken_monerod") == 1 ]] || bad "the case M change did not apply"
