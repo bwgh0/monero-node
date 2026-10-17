@@ -1,0 +1,50 @@
+# Weekly update PRs for the images in docker-compose.yml and for the
+# GitHub Actions. Nothing merges on its own: CI runs on each PR, and a
+# merge to main deploys. docs/monitoring.md has the rules for these PRs.
+#
+# - The minor and patch updates of the monitoring images come in one PR.
+# - monerod is never in a group. The deploy refuses a monerod image change
+#   that ships with a change to another service, and a monerod bump skips
+#   the automatic rollback (deploy.sh exit 5). Merge a monerod PR alone,
+#   and wait for its deploy to finish before you merge the next PR.
+# - Each other image comes in its own PR.
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      monitoring:
+        patterns:
+          - "prom/prometheus"
+          - "prom/blackbox-exporter"
+          - "prom/node-exporter"
+          - "grafana/grafana"
+          - "utxobr/monero-exporter"
+        exclude-patterns:
+          - "*simple-monerod*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions:
+        patterns:
+          - "*"
