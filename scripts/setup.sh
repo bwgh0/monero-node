@@ -133,6 +133,11 @@ echo "==> Installing capacity cron..."
 install -d -m 755 /var/lib/monero-node-capacity
 install -m 644 "${SCRIPT_DIR}/scripts/capacity.cron" /etc/cron.d/monero-node-capacity
 
+# The time of the last good watchdog run, for Watchdog Silent (docs/monitoring.md)
+echo "==> Installing watchdog-metrics cron..."
+install -m 644 "${SCRIPT_DIR}/scripts/watchdog-metrics.cron" /etc/cron.d/monero-node-watchdog-metrics
+python3 "${SCRIPT_DIR}/scripts/watchdog-metrics.py" || echo "    The GitHub API call failed. Cron tries again in 5 minutes."
+
 # Tor runs as uid 104. That uid owns the onion keys on the existing boxes.
 # A new tor-keys volume belongs to root, so give it to uid 104 first.
 # This touches only the volume root, never the keys inside it.

@@ -9,12 +9,16 @@ apiVersion: 1
 #                         the label box: peer (see policies.yml).
 # When both boxes are down, the GitHub watchdog alerts
 # (.github/workflows/watchdog.yml). docs/monitoring.md has the routing table.
+# Watchdog Silent alerts when the watchdog stops. The US box sends it, and the
+# EU box sends it only while the Grafana of the US box fails. So one message
+# goes out when both boxes are up.
 #
 # Some rules stay quiet while a rule with the same cause fires:
 #   Onion Down, Monero Exporter Blind and Container Unhealthy (monerod) while
 #   all RPC probes of this box fail (RPC Endpoint Down covers a monerod outage)
 #   Monero Exporter Blind while monero-exporter is down (Node Down covers it)
 #   Onion TLS Down while the plain onion probe fails (Onion Down covers it)
+#   Watchdog Silent while node-exporter is down (System Exporter Down covers it)
 
 groups:
   - orgId: 1
@@ -395,3 +399,108 @@ groups:
         labels:
           severity: warning
           box: peer
+
+      - uid: alert-watchdog-silent
+        title: Watchdog Silent
+        condition: C
+        execErrState: KeepLast
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Minutes since the end of the last good watchdog run
+              # (scripts/watchdog-metrics.py). Before the first metric, minutes
+              # since Prometheus started, so a box with no metric also alerts.
+              # One box sends it: the US box always, the EU box only while the
+              # Grafana of the US box fails its probe from EU for 10 minutes.
+              # While the EU box waits, the result is 0. It is also 0 while
+              # node-exporter is down: System Exporter Down covers that.
+              expr: >-
+                (
+                  (
+                    (
+                      (time() - max(watchdog_last_success_timestamp_seconds))
+                      or on() (time() - max(process_start_time_seconds{job="prometheus"}))
+                    )
+                    unless on() (max(max_over_time(probe_success{job="grafana",node="us",domain!="${DOMAIN}"}[10m])) == 1)
+                  )
+                  / 60 * on() (max(up{job="node"}) == bool 1)
+                )
+                or on() vector(0)
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [40]
+              refId: C
+          # For the message: 1 when the GitHub API call of this box worked,
+          # 0 when it failed, -1 when this box has no watchdog metrics
+          - refId: D
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max(watchdog_github_api_ok) or on() vector(-1)
+              instant: true
+              range: false
+              refId: D
+          - refId: E
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: D
+              reducer: last
+              refId: E
+          # For the message: minutes since the cron job of this box wrote the
+          # metrics (every 5 minutes), -1 when this box has none
+          - refId: F
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: (time() - max(watchdog_metrics_last_run_timestamp_seconds)) / 60 or on() vector(-1)
+              instant: true
+              range: false
+              refId: F
+          - refId: G
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: F
+              reducer: last
+              refId: G
+        # The age in A already waits 40 minutes
+        for: 0s
+        annotations:
+          summary: >-
+            {{ if lt .Values.G.Value 0.0 }}This box has no watchdog metrics, so it cannot see the watchdog runs
+            {{- else if gt .Values.G.Value 15.0 }}The watchdog metrics of this box are {{ printf "%.0f" .Values.G.Value }} minutes old
+            {{- else if lt .Values.E.Value 1.0 }}The GitHub API call of this box fails, so it cannot see the watchdog runs
+            {{- else }}No watchdog run passed for {{ printf "%.0f" .Values.B.Value }} minutes{{ end }}
+          affected: "Monitoring only. The watchdog is the only alert for an outage of both boxes."
+          first_step: >-
+            {{ if or (lt .Values.G.Value 0.0) (gt .Values.G.Value 15.0) (lt .Values.E.Value 1.0) }}On this box run python3 /opt/monero-node/scripts/watchdog-metrics.py. It prints the result of the GitHub API call. Check /etc/cron.d/monero-node-watchdog-metrics.
+            {{- else }}Run gh run list --workflow watchdog.yml, and on the laptop scripts/watchdog-clock.sh status.{{ end }}
+          description: "An AWS EventBridge rule starts the watchdog (.github/workflows/watchdog.yml) every 10 minutes. A good run is a run on main that passed. A stopped clock (for example an expired GitHub token) or failed runs fire this alert. See Watchdog Silent in docs/monitoring.md."
+        labels:
+          severity: critical

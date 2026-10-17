@@ -65,7 +65,7 @@ WAIT_TIMEOUT=${WAIT_TIMEOUT:-600}       # seconds for each docker compose up --w
 GATE_TIMEOUT=${GATE_TIMEOUT:-300}       # seconds for all polling gate checks together
 PRE_GATE_TIMEOUT=${PRE_GATE_TIMEOUT:-60} # the same for the gate before the change
 STABLE_SECONDS=${STABLE_SECONDS:-30}    # no container may restart in this window
-HOST_SETUP=${HOST_SETUP:-1}             # 0 skips the cron file and the cert chmod (CI)
+HOST_SETUP=${HOST_SETUP:-1}             # 0 skips the cron files and the cert chmod (CI)
 HTTP_HOST=${HTTP_HOST:-localhost}       # where the published ports answer
 TOR_LOG_GRACE=${TOR_LOG_GRACE:-21600}   # tor up longer than this may have rotated out its bootstrap line
 
@@ -451,6 +451,15 @@ host_setup() {
     if [[ -f scripts/capacity.cron ]]; then
         install -d -m 755 /var/lib/node-exporter/textfile /var/lib/monero-node-capacity
         install -m 644 scripts/capacity.cron /etc/cron.d/monero-node-capacity
+    fi
+    # The time of the last good watchdog run, for Watchdog Silent
+    # (docs/monitoring.md). One run now, so the rule has data when Grafana
+    # loads it.
+    if [[ -f scripts/watchdog-metrics.cron ]]; then
+        install -d -m 755 /var/lib/node-exporter/textfile
+        install -m 644 scripts/watchdog-metrics.cron /etc/cron.d/monero-node-watchdog-metrics
+        python3 scripts/watchdog-metrics.py >/dev/null 2>&1 ||
+            warn "the GitHub API call of scripts/watchdog-metrics.py failed. Cron tries again in 5 minutes."
     fi
 }
 

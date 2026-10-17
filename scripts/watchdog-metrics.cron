@@ -1,0 +1,6 @@
+# The time of the last good watchdog run, for the Watchdog Silent alert
+# (see scripts/watchdog-metrics.py). Every 5 minutes: 12 of the 60 GitHub
+# API calls per hour that one IP gets with no token.
+# Installed as /etc/cron.d/monero-node-watchdog-metrics by setup.sh and the deploy workflow.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * root python3 /opt/monero-node/scripts/watchdog-metrics.py >/dev/null 2>&1

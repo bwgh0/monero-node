@@ -224,7 +224,8 @@ services:
       - --no-collector.sockstat
       - --no-collector.conntrack
       # Container state from scripts/docker-metrics.sh and capacity data from
-      # scripts/capacity-metrics.sh (cron, every minute)
+      # scripts/capacity-metrics.sh (cron, every minute). The watchdog runs
+      # from scripts/watchdog-metrics.py (cron, every 5 minutes).
       - --collector.textfile.directory=/host/root/var/lib/node-exporter/textfile
     volumes:
       - /proc:/host/proc:ro
