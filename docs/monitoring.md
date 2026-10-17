@@ -274,7 +274,9 @@ runs on each PR, and a merge to main deploys to both boxes.
   safe: the old image reads the data. A grafana bump can migrate grafana-data
   one way. After a rollback, the old Grafana can then fail to start (deploy.sh
   exit 2), and the box sends alerts again only after a person restores
-  grafana.db. So deploy a grafana bump alone, with a copy of grafana.db.
+  grafana.db. The deploy copies grafana.db before the new image starts (see
+  [Grafana database copies](#grafana-database-copies)). Deploy a grafana bump
+  alone.
 - Dependabot opens grafana PRs only for minor and patch versions. Plan a
   grafana major version by hand, and test the upgrade on a copy of the
   grafana.db of a box first.
@@ -285,6 +287,73 @@ runs on each PR, and a merge to main deploys to both boxes.
 - Dependabot follows the version tag of an image. An image line with only a
   digest (monero-exporter) gets a PR to the digest of the latest tag, with no
   version number. Check such a PR by hand.
+
+## Grafana database copies
+
+Grafana keeps its SQLite database, grafana.db, in the grafana-data volume.
+It holds the alert states, silences, annotations and the admin user. The
+dashboards, alert rules, contact point and data source come from the repo.
+
+When a deploy changes the grafana image, scripts/deploy.sh stops grafana and
+copies grafana.db to `/root/grafana-db-<UTC time>.db` (mode 600) before the
+new image starts. The deploy log names the file. The newest 5 copies stay.
+When the copy fails, the deploy rolls back (exit 1), and the old Grafana
+starts again. A copy holds the password hash of the admin user and the
+contact point settings, so keep it on the box.
+
+### Restore grafana.db after a rollback
+
+A new Grafana can migrate grafana.db one way. After a rollback, the old
+Grafana can then fail to start: the deploy exits with 2, and the check
+"Grafana answers, database ok" fails. The box sends alerts again only when
+Grafana runs. To put the copy back, do these steps on the box as root:
+
+1. Find the copy from the failed deploy. The deploy log has the line
+   `grafana.db backed up to /root/grafana-db-<UTC time>.db`. It is also the
+   newest file in `ls -1 /root/grafana-db-*.db`.
+
+   ```sh
+   cd /opt/monero-node
+   copy=/root/grafana-db-<UTC time>.db
+   ```
+
+2. Stop grafana.
+
+   ```sh
+   docker compose stop grafana
+   ```
+
+3. Put the copy in the volume. These commands use the image of the grafana
+   container, which is the old image after the rollback. They keep the
+   migrated database as grafana.db.migrated in the same volume.
+
+   ```sh
+   image=$(docker inspect -f '{{.Config.Image}}' grafana)
+   volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/grafana"}}{{.Name}}{{end}}{{end}}' grafana)
+   docker run --rm --network none --user 0 --entrypoint sh \
+       -v "$volume:/data" -v "$copy:/copy.db:ro" "$image" -c '
+       cd /data && mv grafana.db grafana.db.migrated &&
+       rm -f grafana.db-journal grafana.db-wal grafana.db-shm &&
+       cp /copy.db grafana.db && chown 472:0 grafana.db && chmod 640 grafana.db'
+   ```
+
+4. Start grafana, and run the gate. The onion names are in
+   .github/workflows/deploy.yml.
+
+   ```sh
+   docker compose up -d --no-deps --wait grafana
+   scripts/deploy.sh gate --onion <name>.onion
+   ```
+
+5. When the gate passes, remove the migrated database.
+
+   ```sh
+   docker compose exec grafana rm /var/lib/grafana/grafana.db.migrated
+   ```
+
+Grafana loses the changes after the copy, for example a silence that a
+person added during the failed deploy. It loads the dashboards and alert
+rules from the repo again when it starts.
 
 ## Prometheus retention
 

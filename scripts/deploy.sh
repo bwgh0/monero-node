@@ -45,6 +45,12 @@
 #
 # The tor-keys volume is only read, by a throwaway read-only container.
 # Nothing here writes to it or removes it, not even in a rollback.
+#
+# When the grafana image changes, the deploy stops grafana and copies
+# grafana.db to $BACKUP_DIR/grafana-db-<UTC time>.db before the new image
+# starts. The newest GRAFANA_DB_KEEP copies stay. When the copy fails, the
+# deploy rolls back (exit 1). After a rollback that leaves Grafana unable to
+# start (exit 2), a person puts the copy back: see docs/monitoring.md.
 set -Eeuo pipefail
 shopt -s inherit_errexit
 
@@ -52,6 +58,7 @@ REPO_DIR=$(readlink -f "${REPO_DIR:-/opt/monero-node}")
 STATE_DIR=${STATE_DIR:-/var/lib/monero-node-deploy}
 BACKUP_DIR=${BACKUP_DIR:-/root}
 BACKUP_KEEP=${BACKUP_KEEP:-10}          # tor key backups to keep
+GRAFANA_DB_KEEP=${GRAFANA_DB_KEEP:-5}   # grafana.db copies to keep
 RUNS_KEEP=${RUNS_KEEP:-20}              # run logs to keep
 LOCK_WAIT=${LOCK_WAIT:-900}             # seconds to wait for a deploy that runs now
 WAIT_TIMEOUT=${WAIT_TIMEOUT:-600}       # seconds for each docker compose up --wait
@@ -63,6 +70,7 @@ HTTP_HOST=${HTTP_HOST:-localhost}       # where the published ports answer
 TOR_LOG_GRACE=${TOR_LOG_GRACE:-21600}   # tor up longer than this may have rotated out its bootstrap line
 
 TOR_USER=104:107                        # owns the onion keys on the boxes
+GRAFANA_DATA=/var/lib/grafana           # the grafana-data mount in the grafana container
 RUN_ID='^([0-9]+|local)-[0-9]+$'        # run dir names: <workflow run id>-<attempt>, or local-<n>
 STATUS_OK='"status"[[:space:]]*:[[:space:]]*"OK"'
 KNOWN="already failing before the change"
@@ -82,6 +90,8 @@ BOX_FILES=(.env aws docker-compose.override.yml tor-keys)
 #    dashboards, alert rules and data source come from the repo. When the
 #    old image cannot run on the data after a rollback, the gate sees it
 #    (exit 2 and an alert), while RPC and the onion run the old commit.
+#    Before a new grafana image starts, backup_grafana_db copies
+#    grafana.db, so a person can put the old data back.
 ROLLBACK_OK_VOLUMES=(tor-keys onion-sock certbot-www certbot-conf prometheus-data grafana-data)
 # Not a file when bash reads this script from stdin ("bash -s -- gate ...")
 SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" || true)
@@ -307,6 +317,94 @@ backup_tor_keys() {
     shopt -u nullglob
     if ((${#all[@]} > BACKUP_KEEP)); then
         rm -f -- "${all[@]:0:${#all[@]}-BACKUP_KEEP}" || return 1
+    fi
+}
+
+# ---------------------------------------------------------------- grafana data
+
+# with_volume_ro <volume> <image> <snippet>: runs a shell snippet in a
+# throwaway container that sees the volume read-only at /data, with no
+# network
+with_volume_ro() {
+    docker run --rm --pull never --network none --cap-drop ALL \
+        --security-opt no-new-privileges --read-only \
+        --volume "$1:/data:ro" --entrypoint sh "$2" -c "$3"
+}
+
+# backup_grafana_db <service images before the checkout>: when grafana gets
+# another image, stop grafana and copy its SQLite database to
+# $BACKUP_DIR/grafana-db-<UTC time>.db (mode 600). A new Grafana can
+# migrate the database one way, and the old Grafana can then fail to start
+# after a rollback. A person then puts this copy back (docs/monitoring.md).
+# Grafana stops first, so the file stays the same during the copy. The
+# "docker compose up" after this starts grafana again: on the new image, or
+# on the old image in a rollback. Each step checks its own status. A
+# failure makes the deploy roll back.
+backup_grafana_db() {
+    local old new id volume image stamp file want got rc=0
+    local -a all
+    old=$(awk '$1 == "grafana" { print $2 }' <<<"$1") || return 1
+    new=$(service_images | awk '$1 == "grafana" { print $2 }') || return 1
+    [[ -n $old && -n $new && $old != "$new" ]] || return 0
+    id=$(cid grafana) || return 1
+    if [[ -z $id ]]; then
+        log "grafana has no container, so there is no grafana.db to copy"
+        return 0
+    fi
+    volume=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$GRAFANA_DATA\"}}{{.Name}}{{end}}{{end}}" "$id") || return 1
+    # The image of the old container. It is on the box while that container exists.
+    image=$(docker inspect -f '{{.Image}}' "$id") || return 1
+    if [[ -z $volume || -z $image ]]; then
+        fail "the grafana container has no volume at $GRAFANA_DATA"
+        return 1
+    fi
+    log "grafana changes from $old to $new. Stop it and copy grafana.db first."
+    docker compose stop grafana || return 1
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    file="$BACKUP_DIR/grafana-db-$stamp.db"
+    # A journal file with data shows that the last write did not finish.
+    # Then grafana.db alone is not complete, and the copy fails.
+    # shellcheck disable=SC2016 # the container shell expands these
+    (
+        umask 077
+        with_volume_ro "$volume" "$image" 'cd /data || exit 1
+            for f in grafana.db-journal grafana.db-wal; do
+                if [ -s "$f" ]; then
+                    echo "$f has data" >&2
+                    exit 3
+                fi
+            done
+            [ -f grafana.db ] || exit 4
+            exec cat grafana.db' >"$file.partial"
+    ) || rc=$?
+    if ((rc == 4)); then
+        rm -f "$file.partial"
+        warn "the volume $volume has no grafana.db, so there is nothing to copy"
+        return 0
+    fi
+    if ((rc != 0)); then
+        rm -f "$file.partial"
+        fail "cannot copy grafana.db from the volume $volume"
+        return 1
+    fi
+    chmod 600 "$file.partial" || return 1
+    # The copy must be the same as the file in the volume, byte for byte
+    want=$(with_volume_ro "$volume" "$image" 'sha256sum < /data/grafana.db') || want=""
+    got=$(sha256sum <"$file.partial") || got=""
+    want=${want%% *} got=${got%% *}
+    if [[ ! $want =~ ^[0-9a-f]{64}$ || $got != "$want" || $(head -c 15 "$file.partial") != "SQLite format 3" ]]; then
+        rm -f "$file.partial"
+        fail "the copy of grafana.db is not the same as the file in the volume $volume"
+        return 1
+    fi
+    mv "$file.partial" "$file" || return 1
+    pass "grafana.db backed up to $file (mode 600)"
+    # Keep the newest GRAFANA_DB_KEEP of these. Other files, like manual copies, stay.
+    shopt -s nullglob
+    all=("$BACKUP_DIR"/grafana-db-????????T??????Z.db)
+    shopt -u nullglob
+    if ((${#all[@]} > GRAFANA_DB_KEEP)); then
+        rm -f -- "${all[@]:0:${#all[@]}-GRAFANA_DB_KEEP}" || return 1
     fi
 }
 
@@ -593,7 +691,8 @@ config_applied() {
 # waits for all of them. Nothing else restarts, so a deploy that does not
 # touch monerod leaves it running.
 # switch_to <commit> [forward]: forward also marks a new image for a service
-# that keeps data (see mark_stateful). A rollback does not.
+# that keeps data (see mark_stateful), and copies grafana.db before a new
+# grafana image starts (see backup_grafana_db). A rollback does neither.
 switch_to() {
     local commit=$1 mode=${2:-} svc path id key images=""
     local -A fp_before=() id_before=() id_after=() stale=() known=()
@@ -616,6 +715,7 @@ switch_to() {
     host_setup
     if [[ $mode == forward ]]; then
         mark_stateful "$images"
+        backup_grafana_db "$images"
     fi
 
     for svc in "${SERVICES[@]}"; do known[$svc]=1; done

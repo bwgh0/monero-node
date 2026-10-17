@@ -28,6 +28,11 @@ monerod_image=ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5
 new_monerod=mnsim-local/simple-monerod:sim-j
 # Case M: a new monerod image that cannot start
 broken_monerod=mnsim-local/simple-monerod:sim-m
+# Cases N and O: "new" grafana images, local tags of the one in docker-compose.yml
+grafana_image=$(sed -n 's|^    image: \(grafana/grafana:[^ ]*\)$|\1|p' "$root/docker-compose.yml")
+[[ -n $grafana_image ]] || bad "docker-compose.yml has no grafana/grafana image"
+new_grafana=mnsim-local/grafana:sim-n
+other_grafana=mnsim-local/grafana:sim-o
 results=()
 rc=0
 
@@ -43,7 +48,7 @@ finish() {
         teardown
     fi
     docker rm -fv mnsim-broken-monerod >/dev/null 2>&1 || true
-    docker rmi "$new_monerod" "$broken_monerod" >/dev/null 2>&1 || true
+    docker rmi "$new_monerod" "$broken_monerod" "$new_grafana" "$other_grafana" >/dev/null 2>&1 || true
     rm -rf "$work"
     step "results"
     printf '%s\n' "${results[@]}"
@@ -227,7 +232,8 @@ record "C onion dir moved: the onion check failed, rolled back, onion and key sa
 step "case F: an image tag that does not exist"
 t0=$SECONDS
 before=$(ids)
-sha=$(change "use a missing grafana tag" sed -i 's|image: grafana/grafana:11.5.2|image: grafana/grafana:0.0.0-does-not-exist|' docker-compose.yml)
+sha=$(change "use a missing grafana tag" sed -i "s|image: $grafana_image|image: grafana/grafana:0.0.0-does-not-exist|" docker-compose.yml)
+[[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c 'image: grafana/grafana:0.0.0-does-not-exist') == 1 ]] || bad "the case F change did not apply"
 deploy deploy "$sha"
 want_rc 1
 want_head "$base"
@@ -467,6 +473,79 @@ want_same_onion
 moved="monerod kept its IP"
 [[ $(ips monerod) == "$monerod_ips" ]] || moved="monerod got a new IP"
 record "G monerod change: deployed, rpc proxy restarted and the gate passed ($moved)"
+
+step "case N: a new grafana image. The deploy copies grafana.db first."
+t0=$SECONDS
+good=$sha
+monerod_started=$(started monerod)
+# Old copies: 5 with the name of the rotation, and one by hand. The
+# rotation keeps the newest 5 of its own names, and the copy by hand.
+for day in 01 02 03 04 05; do
+    : >"$backups/grafana-db-202601${day}T000000Z.db"
+done
+touch "$backups/grafana-db-by-hand.db"
+docker tag "$grafana_image" "$new_grafana"
+sha=$(change_from "$good" "a new grafana image" sed -i "s|image: $grafana_image|image: $new_grafana|" docker-compose.yml)
+[[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c "image: $new_grafana") == 1 ]] || bad "the case N change did not apply"
+deploy deploy "$sha"
+want_rc 0
+want_head "$sha"
+want_all_running
+want_same_onion
+want_monerod_untouched
+[[ $(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -aq grafana)") == "$new_grafana" ]] ||
+    bad "grafana does not run its new image"
+copy=$(sed -n 's|.*PASS  grafana.db backed up to \(.*\) (mode 600)$|\1|p' "$work/last.log")
+[[ -n $copy && -f $copy ]] || bad "the log names no grafana.db copy"
+[[ $(stat -c %a "$copy") == 600 ]] || bad "$copy has mode $(stat -c %a "$copy")"
+python3 - "$copy" <<'PY' || bad "the copy is not a complete Grafana database"
+import sqlite3, sys
+db = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+assert db.execute("pragma integrity_check").fetchone()[0] == "ok"
+assert db.execute("select count(*) from migration_log").fetchone()[0] > 0
+PY
+mapfile -t kept < <(find "$backups" -name 'grafana-db-????????T??????Z.db' | sort)
+((${#kept[@]} == 5)) || bad "${#kept[@]} grafana.db copies, expected 5"
+[[ ${kept[-1]} == "$copy" && ! -e $backups/grafana-db-20260101T000000Z.db ]] || bad "the rotation kept the oldest copy"
+[[ -e $backups/grafana-db-by-hand.db ]] || bad "the rotation removed the copy by hand"
+record "N new grafana image: grafana.db copied before the new image started (mode 600, integrity ok), 5 copies kept, the copy by hand kept"
+
+step "case O: the copy of grafana.db fails after grafana stops. The rollback starts grafana again."
+t0=$SECONDS
+good=$sha
+# A sha256sum that gives a wrong sum for a grafana.db copy, and the real
+# sum for all other input. So the check of the copy fails.
+mkdir -p "$work/fake-sha"
+cat >"$work/fake-sha/sha256sum" <<'FAKE'
+#!/usr/bin/env bash
+if [[ $(readlink /proc/self/fd/0 2>/dev/null) == */grafana-db-*.db.partial ]]; then
+    printf '%064d  -\n' 0
+    exit 0
+fi
+exec /usr/bin/sha256sum "$@"
+FAKE
+chmod 755 "$work/fake-sha/sha256sum"
+copies=$(find "$backups" -name 'grafana-db-*' | sort)
+docker tag "$grafana_image" "$other_grafana"
+sha=$(change_from "$good" "another grafana image" sed -i "s|image: $new_grafana|image: $other_grafana|" docker-compose.yml)
+[[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c "image: $other_grafana") == 1 ]] || bad "the case O change did not apply"
+extra_env=(PATH="$work/fake-sha:$PATH")
+deploy deploy "$sha"
+want_rc 1
+want_head "$good"
+want_all_running
+want_same_onion
+want_monerod_untouched
+grep -q "grafana changes from $new_grafana to $other_grafana. Stop it and copy grafana.db first." "$work/last.log" ||
+    bad "the deploy did not stop grafana for the copy"
+grep -q 'FAIL  the copy of grafana.db is not the same as the file in the volume' "$work/last.log" ||
+    bad "the log does not name the failed copy"
+grep -q 'Roll back to' "$work/last.log" || bad "it did not roll back"
+[[ $(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -aq grafana)") == "$new_grafana" ]] ||
+    bad "grafana does not run its old image after the rollback"
+[[ $(find "$backups" -name 'grafana-db-*' | sort) == "$copies" ]] || bad "the failed copy changed the copies in $backups"
+sha=$good
+record "O copy of grafana.db fails after grafana stopped: rolled back (exit 1), grafana runs its old image again, no copy added"
 
 step "onion key backups"
 mapfile -t made < <(find "$backups" -name 'tor-keys-????????T??????Z.tgz' | sort)
