@@ -46,20 +46,23 @@ trap finish EXIT
 
 g() { git -C "$dev" -c user.name=sim -c user.email=sim@example.invalid "$@"; }
 
-# change <message> <command...>: change dev, commit on top of base, push to main, print the sha
-change() {
-    local message=$1
-    shift
-    g reset -q --hard "$base"
+# change_from <sha> <message> <command...>: change dev, commit on top of
+# <sha>, push to main, print the sha
+change_from() {
+    local from=$1 message=$2
+    shift 2
+    g reset -q --hard "$from"
     (cd "$dev" && "$@")
     g commit -qam "$message"
     g push -qf origin HEAD:main
     g rev-parse HEAD
 }
+# change <message> <command...>: the same on top of base
+change() { change_from "$base" "$@"; }
 
 deploy_env=(
     REPO_DIR="$box" STATE_DIR="$work/state" BACKUP_DIR="$backups" BACKUP_KEEP=3 HOST_SETUP=0
-    WAIT_TIMEOUT=240 GATE_TIMEOUT=240 STABLE_SECONDS=15
+    WAIT_TIMEOUT=240 GATE_TIMEOUT=240 PRE_GATE_TIMEOUT=30 STABLE_SECONDS=15
 )
 
 runs=$work/state/runs
@@ -80,6 +83,25 @@ deploy() {
     rc=${PIPESTATUS[0]}
     set -e
     extra_env=()
+}
+
+# deploy_ssh <sha> <run id>: runs scripts/deploy-ssh.sh as the workflow
+# does. A stand-in ssh runs the box commands here. Sets rc and known (the
+# already_failing output).
+deploy_ssh() {
+    : >"$work/gh-output"
+    set +e
+    (
+        cd "$root" &&
+            env "${deploy_env[@]}" "${extra_env[@]}" PATH="$work/fake-ssh:$PATH" KNOWN_HOSTS="$work/known_hosts" \
+                SSH_KEY=not-a-key GITHUB_OUTPUT="$work/gh-output" GITHUB_RUN_ID="$2" GITHUB_RUN_ATTEMPT=1 RUNS_DIR="$runs" \
+                scripts/deploy-ssh.sh sim.box.invalid "$domain" "$onion" "$1"
+    ) 2>&1 | sed -u 's/^/  ssh| /' | tee "$work/last.log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    extra_env=()
+    grep -qx "rc=$rc" "$work/gh-output" || bad "deploy-ssh.sh wrote no rc=$rc output"
+    known=$(sed -n 's/^already_failing=//p' "$work/gh-output")
 }
 
 ids() {
@@ -135,6 +157,21 @@ onion=$(onion_name) || bad "tor wrote no onion name"
 key=$(onion_key_sha256)
 monerod_started=$(started monerod)
 ok "the box runs ${base:0:7}, onion $onion"
+# For deploy_ssh: a pinned host key, and an ssh that runs the command here
+printf 'sim.box.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderNotARealKey0000000000000000\n' >"$work/known_hosts"
+mkdir -p "$work/fake-ssh"
+cat >"$work/fake-ssh/ssh" <<'FAKE'
+#!/usr/bin/env bash
+while (($#)); do
+    case $1 in
+        -i | -o) shift 2 ;;
+        root@*) shift && break ;;
+        *) echo "fake ssh: unexpected argument $1" >&2 && exit 255 ;;
+    esac
+done
+exec bash -c "$*"
+FAKE
+chmod 755 "$work/fake-ssh/ssh"
 
 step "case A, the incident: tor cannot start (bad entrypoint)"
 t0=$SECONDS
@@ -146,6 +183,7 @@ want_head "$base"
 want_all_running
 want_same_onion
 want_monerod_untouched
+grep -qE 'FAIL  tor(-client)? ' "$work/last.log" || bad "no FAIL line names tor"
 record "A tor entrypoint broken: gate failed, rolled back to base, onion and key same, monerod untouched"
 
 step "case B: prometheus.yml does not load"
@@ -259,6 +297,47 @@ want_head "$good"
 [[ $(ids) == "$before" ]] || bad "a container changed"
 sha=$good
 record "L wrong --key-sha256, and a commit that tracks .env: both stopped before any change, .env kept"
+
+step "case H: a fault from before the deploy (no onion socket) causes no rollback"
+t0=$SECONDS
+docker compose exec -T onion-proxy rm -f /run/onion/monerod.sock
+sha=$(change "a prometheus.yml comment for case H" sh -c 'printf "# case H\n" >> monitoring/prometheus.yml')
+extra_env=(GATE_TIMEOUT=60)
+deploy_ssh "$sha" 777
+want_rc 0
+want_head "$sha"
+want_monerod_untouched
+for check in "the onion socket exists in tor" "the onion socket answers plain HTTP" "the onion socket answers TLS"; do
+    grep -qF "FAIL  $check (already failing before the change)" "$work/last.log" || bad "the log does not call this check already failing: $check"
+    [[ $known == *"$check"* ]] || bad "already_failing does not name: $check"
+done
+grep -q 'WARN  fails before the change: the onion socket exists in tor' "$work/last.log" || bad "the gate before the change did not see the fault"
+grep -q 'checks already failing::' "$work/last.log" || bad "deploy-ssh.sh did not warn about the checks"
+docker compose up -d --no-deps --force-recreate onion-proxy >/dev/null 2>&1
+for ((i = 0; i < 30; i++)); do
+    docker compose exec -T tor test -S /run/onion/monerod.sock && break
+    sleep 2
+done
+docker compose exec -T tor test -S /run/onion/monerod.sock || bad "the onion socket did not come back"
+record "H fault from before: deployed (exit 0) with no rollback, log and already_failing name the 3 socket checks"
+
+step "case I: a new fault (the rpc proxy points to a closed port) rolls back"
+t0=$SECONDS
+good=$sha
+sha=$(change "point the rpc proxy to a closed port" sed -i 's|server monerod:18081;|server monerod:18099;|' monitoring/rpc-proxy.conf)
+[[ $(git -C "$dev" show "$sha:monitoring/rpc-proxy.conf" | grep -c 'monerod:18099') == 1 ]] || bad "the case I change did not apply"
+extra_env=(GATE_TIMEOUT=60)
+deploy deploy "$sha"
+want_rc 1
+want_head "$good"
+want_all_running
+want_same_onion
+want_monerod_untouched
+grep -q 'FAIL  monerod-rpc-proxy reaches monerod$' "$work/last.log" || bad "the gate did not name the rpc proxy"
+docker compose exec -T monerod-rpc-proxy curl -sf --max-time 10 http://localhost:18081/get_height >/dev/null ||
+    bad "the rpc proxy does not reach monerod after the rollback"
+sha=$good
+record "I new fault: the rpc proxy check regressed, rolled back to H, the proxy works again"
 
 step "case G: a change to monerod only. The rpc proxy must follow the new monerod."
 t0=$SECONDS

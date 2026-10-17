@@ -6,7 +6,9 @@
 # It copies this commit's deploy.sh to the box and starts it there detached
 # from SSH, so a dropped connection cannot stop a deploy or a rollback
 # halfway. Then it follows the log until the deploy ends and exits with the
-# deploy's code (see scripts/deploy.sh). It writes rc=<code> to GITHUB_OUTPUT.
+# deploy's code (see scripts/deploy.sh). It writes rc=<code> to GITHUB_OUTPUT,
+# and already_failing=<checks>: the checks that failed before the deploy and
+# still fail after it.
 set -euo pipefail
 
 host=$1 domain=$2 onion=$3 commit=$4
@@ -21,7 +23,9 @@ if [[ ${GITHUB_ACTIONS:-} == true ]]; then
     done <<<"$SSH_KEY"
 fi
 known_hosts=$(readlink -f "${KNOWN_HOSTS:-.github/known_hosts}")
-run_dir=/var/lib/monero-node-deploy/runs/${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}
+# RUNS_DIR is for ci/simulate-deploy.sh. It must match STATE_DIR on the box.
+run_dir=${RUNS_DIR:-/var/lib/monero-node-deploy/runs}/${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}
+[[ $run_dir =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "::error::bad run dir $run_dir"; exit 3; }
 remote=$run_dir/deploy.sh
 
 if ! grep -q "^$host ssh-ed25519 " "$known_hosts"; then
@@ -30,7 +34,8 @@ if ! grep -q "^$host ssh-ed25519 " "$known_hosts"; then
 fi
 
 key=$(mktemp)
-trap 'rm -f "$key"' EXIT
+out=$(mktemp) # a copy of the box output
+trap 'rm -f "$key" "$out"' EXIT
 chmod 600 "$key"
 printf '%s\n' "$SSH_KEY" >"$key"
 
@@ -62,23 +67,32 @@ if ((rc == 0)); then
     echo "deploy $commit to $host"
     commands_off
     set +e
-    on_box bash "$remote" start --run-dir "$run_dir" --target "$commit" --domain "$domain" --onion "$onion"
-    rc=$?
+    on_box bash "$remote" start --run-dir "$run_dir" --target "$commit" --domain "$domain" --onion "$onion" | tee -a "$out"
+    rc=${PIPESTATUS[0]}
     for try in 1 2 3 4 5 6 7 8 9 10; do
         ((rc == 255)) || break
         echo "--- SSH to $host dropped. The deploy goes on there. Follow it again ($try/10)."
         sleep 15
-        on_box bash "$remote" follow --run-dir "$run_dir"
-        rc=$?
+        on_box bash "$remote" follow --run-dir "$run_dir" | tee -a "$out"
+        rc=${PIPESTATUS[0]}
     done
     set -e
     commands_on
 fi
 
-echo "rc=$rc" >>"${GITHUB_OUTPUT:-/dev/null}"
+# The box output is not trusted, so only plain characters go on to the alert
+known=$(sed -n 's/^[0-9:]*  WARN  already failing before the change: //p' "$out" |
+    tr -cd '[:alnum:] .,:/()_\n-' | sort -u | paste -sd ';' - | sed 's/;/; /g')
+{
+    echo "rc=$rc"
+    echo "already_failing=$known"
+} >>"${GITHUB_OUTPUT:-/dev/null}"
+if [[ -n $known ]]; then
+    echo "::warning title=$domain checks already failing::These checks failed before the deploy and still fail: $known"
+fi
 case $rc in
-    0) echo "deployed $commit to $domain, and the checks passed" ;;
-    1) echo "::error title=$domain rolled back::The deploy failed its checks, so the box went back to the previous commit. That commit passed the checks." ;;
+    0) echo "deployed $commit to $domain, and no check regressed" ;;
+    1) echo "::error title=$domain rolled back::The deploy failed a step or broke a check, so the box went back to the previous commit. After the rollback, every check passed that passed before." ;;
     2) echo "::error title=$domain ROLLBACK FAILED::The deploy failed, and the rollback failed too. The box needs a person now." ;;
     3) echo "::error title=$domain not deployed::The deploy stopped before it changed anything. See the log." ;;
     4) echo "::error title=$domain not deployed::The deploy did not start (SSH)." ;;

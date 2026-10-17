@@ -1,9 +1,10 @@
 name: Deploy monero-node
 
 # CI first, then EU, then US. Each box runs scripts/deploy.sh: back up the
-# onion keys, deploy, check (scripts/deploy.sh gate), and roll back to the
-# previous commit when a check fails. US waits for a good EU deploy.
-# Any failure sends a Telegram message.
+# onion keys, check the box, deploy, check it again, and roll back to the
+# previous commit when a check fails that passed before the deploy. US
+# waits for a good EU deploy. A failure, or a check that already failed
+# before the deploy and still fails, sends a Telegram message.
 on:
   push:
     branches: [main]
@@ -47,6 +48,7 @@ jobs:
     timeout-minutes: 50
     outputs:
       rc: ${{ steps.deploy.outputs.rc }}
+      already_failing: ${{ steps.deploy.outputs.already_failing }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -73,6 +75,7 @@ jobs:
     timeout-minutes: 50
     outputs:
       rc: ${{ steps.deploy.outputs.rc }}
+      already_failing: ${{ steps.deploy.outputs.already_failing }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -86,7 +89,10 @@ jobs:
 
   notify:
     needs: [ci, deploy-eu, deploy-us]
-    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    if: >-
+      always() &&
+      (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') ||
+       needs.deploy-eu.outputs.already_failing != '' || needs.deploy-us.outputs.already_failing != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -97,8 +103,10 @@ jobs:
           CI_RESULT: ${{ needs.ci.result }}
           EU_RESULT: ${{ needs.deploy-eu.result }}
           EU_RC: ${{ needs.deploy-eu.outputs.rc }}
+          EU_KNOWN: ${{ needs.deploy-eu.outputs.already_failing }}
           US_RESULT: ${{ needs.deploy-us.result }}
           US_RC: ${{ needs.deploy-us.outputs.rc }}
+          US_KNOWN: ${{ needs.deploy-us.outputs.already_failing }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -115,18 +123,25 @@ jobs:
               success/*) echo "deployed" ;;
               skipped/*) echo "not deployed" ;;
               cancelled/*) echo "cancelled. A deploy that started on the box runs to its end. See the run log." ;;
-              failure/1) echo "FAILED, rolled back. The previous commit passed the checks." ;;
+              failure/1) echo "FAILED, rolled back. After the rollback, every check passed that passed before the deploy." ;;
               failure/2) echo "FAILED, and the ROLLBACK FAILED. The box needs a person now." ;;
               failure/3) echo "stopped before any change" ;;
               failure/4) echo "did not start (SSH)" ;;
               *) echo "$1, no result from the box. See the run log." ;;
             esac
           }
+          # Checks that failed before the deploy and still fail. They cause
+          # no rollback, because the deploy may be their fix.
+          known() {
+            if [[ -n $1 ]]; then
+              echo " Already failing before the deploy, so no rollback for these: $1"
+            fi
+          }
           text="monero-node deploy: action needed
           Commit: ${GITHUB_SHA::7} ${COMMIT_MESSAGE%%$'\n'*}
           CI: $CI_RESULT
-          EU: $(result "$EU_RESULT" "$EU_RC")
-          US: $(result "$US_RESULT" "$US_RC")
+          EU: $(result "$EU_RESULT" "$EU_RC")$(known "$EU_KNOWN")
+          US: $(result "$US_RESULT" "$US_RC")$(known "$US_KNOWN")
           $RUN_URL"
           curl -sS --fail --max-time 20 -o /dev/null \
             --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \

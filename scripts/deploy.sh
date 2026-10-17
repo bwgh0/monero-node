@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
 # Deploys one commit of monero-node on this box, checks the result, and
-# rolls back to the previous commit when any step or check fails.
+# rolls back to the previous commit when the deploy fails a step or breaks
+# a check that passed before it.
 #
 # The deploy workflow runs it through scripts/deploy-ssh.sh. By hand, as root:
 #   scripts/deploy.sh deploy --target <full sha> --domain eu.node.monero.one --onion <name>.onion
 #   scripts/deploy.sh gate --onion <name>.onion
 #
 # Commands:
-#   deploy  check out --target, start it, run the gate, roll back on failure
+#   deploy  run the gate, check out --target and start it, run the gate again,
+#           and roll back when a check fails that passed before the change
 #   start   run deploy detached from this SSH session, follow its log, exit with its code
 #   follow  follow a detached deploy again (after a dropped SSH session)
-#   gate    run only the checks: containers, HTTP, tor, onion name and key
+#   gate    run only the checks: containers, HTTP, chain height, tor, onion
+#           name and key. Exit 0 when all pass, 1 at the first failure.
 #   render  fill the ${DOMAIN} and ${TELEGRAM_CHAT_ID} templates in the checkout
 #
+# Options: --target <full sha>, --domain <box name>, --onion <name>.onion,
+# --run-dir <dir> (start, follow), and --key-sha256 <hex> (deploy, gate): the
+# sha256 of the onion secret key that the box must have.
+#
 # Exit codes of deploy, start and follow:
-#   0  deployed, and the gate passed
-#   1  failed, rolled back, and the previous commit passed the gate
+#   0  deployed, and no check regressed. The log lists the checks that
+#      failed before the change and still fail ("already failing").
+#   1  a step failed or a check regressed, so it rolled back. After the
+#      rollback, every check passed that passed before the change.
 #   2  failed, and the rollback failed too. The box needs a person now.
 #   3  stopped before any change (lock, wrong box, onion key, backup, fetch, bad --run-dir)
 #   4  (follow) no deploy started in --run-dir
@@ -33,6 +42,7 @@ RUNS_KEEP=${RUNS_KEEP:-20}              # run logs to keep
 LOCK_WAIT=${LOCK_WAIT:-900}             # seconds to wait for a deploy that runs now
 WAIT_TIMEOUT=${WAIT_TIMEOUT:-600}       # seconds for each docker compose up --wait
 GATE_TIMEOUT=${GATE_TIMEOUT:-300}       # seconds for all polling gate checks together
+PRE_GATE_TIMEOUT=${PRE_GATE_TIMEOUT:-60} # the same for the gate before the change
 STABLE_SECONDS=${STABLE_SECONDS:-30}    # no container may restart in this window
 HOST_SETUP=${HOST_SETUP:-1}             # 0 skips the cron file and the cert chmod (CI)
 HTTP_HOST=${HTTP_HOST:-localhost}       # where the published ports answer
@@ -41,15 +51,17 @@ TOR_LOG_GRACE=${TOR_LOG_GRACE:-21600}   # tor up longer than this may have rotat
 TOR_USER=104:107                        # owns the onion keys on the boxes
 RUN_ID='^([0-9]+|local)-[0-9]+$'        # run dir names: <workflow run id>-<attempt>, or local-<n>
 STATUS_OK='"status"[[:space:]]*:[[:space:]]*"OK"'
+KNOWN="already failing before the change"
 # Files that only the box has. No deployed commit may track them.
 BOX_FILES=(.env aws docker-compose.override.yml tor-keys)
 # Not a file when bash reads this script from stdin ("bash -s -- gate ...")
 SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" || true)
 
 CMD="" TARGET="" DOMAIN="" ONION="" KEY_SHA256="" RUN_DIR="" COMPOSE_VERSION=""
-PREV="" BASE_KEY="" GATE_DEADLINE=0 ONION_SOCK=""
-PROJECT="" TOR_IMAGE="" TOR_KEYS_VOLUME="" CERTS_VOLUME="" CERTBOT_IMAGE=""
+PREV="" BASE_KEY="" PROJECT="" TOR_IMAGE="" TOR_KEYS_VOLUME="" CERTS_VOLUME="" CERTBOT_IMAGE=""
+GATE_MODE=post GATE_PASS=1 GATE_DEADLINE=0 GATE_DIR="" GATE_FILE="" PRE_HEIGHT="" PHASE_RC=0
 SERVICES=() ARGS=()
+declare -A PRE=()                       # check id -> its result before the change: pass, fail or wrong
 
 # ---------------------------------------------------------------- output
 
@@ -330,6 +342,25 @@ repo_binds() {
         done
 }
 
+# Every service has a container with the compose config of the checkout
+config_applied() {
+    local hashes svc hash id label rc=0
+    hashes=$(docker compose config --hash '*') || return 1
+    [[ -n $hashes ]] || return 1
+    while read -r svc hash; do
+        id=$(cid "$svc")
+        label=""
+        if [[ -n $id ]]; then
+            label=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$id") || label=""
+        fi
+        if [[ $label != "$hash" ]]; then
+            fail "$svc does not run the config of the checkout"
+            rc=1
+        fi
+    done <<<"$hashes"
+    return "$rc"
+}
+
 # Moves the checkout and the stack to a commit. A container keeps the old
 # copy of a file it mounts from the checkout, even after git replaces it.
 # So the services whose mounted files changed are recreated first. Then
@@ -366,7 +397,15 @@ switch_to() {
     fi
 
     log "docker compose up --wait (up to ${WAIT_TIMEOUT}s)"
-    docker compose up -d --remove-orphans --wait --wait-timeout "$WAIT_TIMEOUT"
+    if ! docker compose up -d --remove-orphans --wait --wait-timeout "$WAIT_TIMEOUT"; then
+        # A service that failed before the change fails this wait too. When
+        # every service runs the new config, the gate decides.
+        if ! config_applied; then
+            fail "docker compose up stopped before every service ran the config of $commit"
+            return 1
+        fi
+        warn "docker compose up --wait failed, but every service runs the config of $commit. The gate decides."
+    fi
 
     while read -r svc id; do id_after[$svc]=$id; done < <(service_ids)
     for svc in "${SERVICES[@]}"; do
@@ -377,6 +416,18 @@ switch_to() {
 }
 
 # ---------------------------------------------------------------- gate
+#
+# A deploy runs the gate twice: before the change ("pre") and after it
+# ("post"). The pre gate changes nothing. Each check records its result:
+# pass, fail, or "wrong" when tor serves another onion. After the change, a
+# check that fails and did not fail before is a regression, and only a
+# regression makes the deploy roll back. A check with no result from before
+# counts as one that passed. A check that failed before and still fails is
+# "already failing": the deploy may be the fix for it, so it causes no
+# rollback. A post gate stops at the first regression.
+#
+# Pass 1 runs the checks that did not fail before. Pass 2 then runs the
+# others, so a check that already fails cannot use up the time of the rest.
 
 # State and last log lines of a container, for the job log
 explain() {
@@ -385,64 +436,121 @@ explain() {
     docker logs --tail 15 "$1" 2>&1 | quote_log || true
 }
 
-# poll <what> <command...>: retry every 5 s until it passes or the gate time runs out
-poll() {
-    local what=$1
-    shift
+# gate_turn <id>: the check runs in this pass of the gate
+gate_turn() {
+    [[ $GATE_MODE == post ]] || return 0
+    if [[ ${PRE[$1]:-pass} == pass ]]; then ((GATE_PASS == 1)); else ((GATE_PASS == 2)); fi
+}
+
+# is_regression <id> <result>: for a check that fails now. tor that serves
+# another onion is a regression, unless it did so before the change too.
+is_regression() {
+    local pre=${PRE[$1]:-pass}
+    [[ $pre == pass || ($2 == wrong && $pre != wrong) ]]
+}
+
+# record [-q] <id> <result> <text>: adds the result to $GATE_FILE and prints
+# it (-q: no PASS line). In a post gate, a regression ends the gate: record
+# exits the deploy phase, or the gate command, with 1.
+record() {
+    local quiet=0
+    if [[ $1 == -q ]]; then
+        quiet=1
+        shift
+    fi
+    local id=$1 result=$2 text=$3
+    if [[ -n $GATE_FILE ]]; then
+        printf '%s\t%s\t%s\n' "$id" "$result" "$text" >>"$GATE_FILE"
+    fi
+    if [[ $result == pass ]]; then
+        if [[ $GATE_MODE == post && ${PRE[$id]:-pass} != pass ]]; then
+            pass "$text (it failed before the change)"
+        elif ((quiet == 0)); then
+            pass "$text"
+        fi
+    elif [[ $GATE_MODE == pre ]]; then
+        warn "fails before the change: $text"
+    elif is_regression "$id" "$result"; then
+        fail "$text"
+        exit 1
+    else
+        fail "$text ($KNOWN)"
+    fi
+}
+
+# check <id> <text> <command...>: retries the command every 5 s until it
+# passes or the gate time runs out, and records the result
+check() {
+    local id=$1 what=$2
+    shift 2
+    gate_turn "$id" || return 0
     until "$@"; do
         if ((SECONDS >= GATE_DEADLINE)); then
-            fail "$what"
-            return 1
+            record "$id" fail "$what"
+            return 0
         fi
         sleep 5
     done
-    pass "$what"
+    record "$id" pass "$what"
 }
 
-# Every service has a running container, healthy where it has a healthcheck
+# Every service of this pass has a running container, healthy where it has
+# a healthcheck. A container that is created or dead, or in a crash loop,
+# fails at once. The others get until the end of the gate time.
 check_containers() {
-    local svc id state health restarts
-    local -a pending
+    local svc id state health restarts n bad=0
+    local -a todo=() left
+    for svc in "${SERVICES[@]}"; do
+        if gate_turn "svc:$svc"; then todo+=("$svc"); fi
+    done
+    n=${#todo[@]}
+    ((n)) || return 0
     while :; do
-        pending=()
-        for svc in "${SERVICES[@]}"; do
+        left=()
+        for svc in "${todo[@]}"; do
             id=$(cid "$svc")
-            if [[ -z $id ]]; then
-                fail "$svc has no container"
-                return 1
+            state=missing health=none restarts=0
+            if [[ -n $id ]]; then
+                read -r state health restarts < <(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.RestartCount}}' "$id" 2>/dev/null || echo missing none 0)
             fi
-            read -r state health restarts < <(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.RestartCount}}' "$id")
             case $state/$health in
-                running/none | running/healthy) ;;
+                running/none | running/healthy) record -q "svc:$svc" pass "$svc runs" ;;
+                missing/*)
+                    bad=$((bad + 1))
+                    record "svc:$svc" fail "$svc has no container"
+                    ;;
                 created/* | dead/*)
-                    fail "$svc is $state"
+                    bad=$((bad + 1))
                     explain "$id"
-                    return 1
+                    record "svc:$svc" fail "$svc is $state"
                     ;;
                 *)
                     # A crash loop does not heal. Stop the wait early.
                     if [[ $state != running ]] && ((restarts >= 3)); then
-                        fail "$svc crash-loops ($restarts restarts)"
+                        bad=$((bad + 1))
                         explain "$id"
-                        return 1
+                        record "svc:$svc" fail "$svc crash-loops ($restarts restarts)"
+                    else
+                        left+=("$svc")
                     fi
-                    pending+=("$svc")
                     ;;
             esac
         done
-        if ((${#pending[@]} == 0)); then
-            pass "all ${#SERVICES[@]} services run, healthy where they have a healthcheck"
-            return 0
-        fi
+        ((${#left[@]})) || break
         if ((SECONDS >= GATE_DEADLINE)); then
-            for svc in "${pending[@]}"; do
-                fail "$svc is not running and healthy"
+            for svc in "${left[@]}"; do
+                bad=$((bad + 1))
                 explain "$(cid "$svc")"
+                record "svc:$svc" fail "$svc is not running and healthy"
             done
-            return 1
+            break
         fi
+        todo=("${left[@]}")
         sleep 5
     done
+    if ((bad == 0)); then
+        pass "$n services run, healthy where they have a healthcheck"
+    fi
 }
 
 # Lines of "<service> <id> <status> <start time> <restarts>"
@@ -451,6 +559,31 @@ snapshot() {
     mapfile -t ids < <(project_ids)
     ((${#ids[@]})) || return 0
     docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{.Id}} {{.State.Status}} {{.State.StartedAt}} {{.RestartCount}}' "${ids[@]}" | sort
+}
+
+# check_stable <snapshot> <start>: no container of this pass restarted
+# within STABLE_SECONDS from the start
+check_stable() {
+    local svc rest n=0 bad=0
+    local -a changed
+    for svc in "${SERVICES[@]}"; do
+        if gate_turn "svc:$svc"; then n=$((n + 1)); fi
+    done
+    ((n)) || return 0
+    rest=$((STABLE_SECONDS - (SECONDS - $2)))
+    if ((rest > 0)); then
+        sleep "$rest"
+    fi
+    mapfile -t changed < <({ diff <(printf '%s\n' "$1") <(snapshot) || true; } | awk '/^[<>]/ { print $2 }' | sort -u)
+    for svc in "${changed[@]}"; do
+        gate_turn "svc:$svc" || continue
+        bad=$((bad + 1))
+        explain "$(cid "$svc")"
+        record "svc:$svc" fail "$svc restarted during the gate"
+    done
+    if ((bad == 0)); then
+        pass "no container restarted in $((SECONDS - $2))s"
+    fi
 }
 
 # http_ok <url> <regex>: the body must match
@@ -470,12 +603,34 @@ exec_ok() {
     [[ $body =~ $STATUS_OK ]]
 }
 
-# The tor in a service logged "Bootstrapped 100%" since its last start
+# The chain height from the restricted RPC
+chain_height() {
+    local body re='"height"[[:space:]]*:[[:space:]]*([0-9]+)'
+    body=$(curl -sk --max-time 10 "https://$HTTP_HOST:18089/get_height" 2>/dev/null) || return 1
+    [[ $body =~ $re ]] || return 1
+    printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+# Before the change, it notes the height. After the change, the height
+# must be at least the one from before.
+height_ok() {
+    local height
+    height=$(chain_height) || return 1
+    if [[ $GATE_MODE == pre ]]; then
+        if [[ -n $GATE_DIR ]]; then printf '%s\n' "$height" >"$GATE_DIR/height"; fi
+        return 0
+    fi
+    ((height >= ${PRE_HEIGHT:-0}))
+}
+
+# The tor in a service runs, and logged "Bootstrapped 100%" since its last
+# start. A container that never started has the start time 0001-01-01.
 tor_bootstrapped() {
-    local id started logs age
+    local id state started logs age
     id=$(cid "$1")
     [[ -n $id ]] || return 1
-    started=$(docker inspect -f '{{.State.StartedAt}}' "$id") || return 1
+    read -r state started < <(docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' "$id" 2>/dev/null) || return 1
+    [[ $state == running ]] || return 1
     logs=$(docker logs --since "$started" "$id" 2>&1) || return 1
     [[ $logs != *"Bootstrapped 100%"* ]] || return 0
     # Its 1 MB log may have dropped the line after a long run
@@ -489,73 +644,130 @@ tor_bootstrapped() {
 
 flag_value() { awk -v f="$1" 'p { print; exit } $0 == f { p = 1 }'; }
 
-# tor serves the pinned onion name, with the key from before the deploy
-check_onion() {
-    local id args dir port out host key
+# The unix socket path of tor's --HiddenServicePort
+onion_sock() {
+    local id port
     id=$(cid tor)
-    if [[ -z $id ]]; then
-        fail "tor has no container"
+    [[ -n $id ]] || return 1
+    port=$(docker inspect -f '{{range .Args}}{{println .}}{{end}}' "$id" 2>/dev/null | flag_value --HiddenServicePort) || return 1
+    [[ $port == *unix:* ]] || return 1
+    printf '%s\n' "${port##*unix:}"
+}
+
+onion_sock_exists() {
+    local sock
+    sock=$(onion_sock) || return 1
+    docker exec "$(cid tor)" test -S "$sock"
+}
+
+# onion_answers <http|https>: onion-proxy answers on the onion socket
+onion_answers() {
+    local sock
+    sock=$(onion_sock) || return 1
+    exec_ok onion-proxy "$1://localhost/get_height" --unix-socket "$sock"
+}
+
+# Prints why tor does not serve $ONION with the key from before the change.
+# Exit 0: it does. 1: tor serves no onion (yet). 2: tor serves another name
+# or key. 3: tor has no onion service in its flags.
+onion_state() {
+    local id args dir port state out host key
+    id=$(cid tor)
+    if [[ -z $id ]] || ! args=$(docker inspect -f '{{range .Args}}{{println .}}{{end}}' "$id" 2>/dev/null); then
+        echo "tor has no container"
         return 1
     fi
-    args=$(docker inspect -f '{{range .Args}}{{println .}}{{end}}' "$id")
     dir=$(flag_value --HiddenServiceDir <<<"$args")
     port=$(flag_value --HiddenServicePort <<<"$args")
     if [[ -z $dir || $port != *unix:* ]]; then
-        fail "tor has no --HiddenServiceDir flag or no unix socket --HiddenServicePort"
+        echo "tor has no --HiddenServiceDir flag or no unix socket --HiddenServicePort"
+        return 3
+    fi
+    state=$(docker inspect -f '{{.State.Status}}' "$id" 2>/dev/null) || state=gone
+    if [[ $state != running ]]; then
+        echo "tor is $state, so the gate cannot read its onion name and key"
         return 1
     fi
-    ONION_SOCK=${port##*unix:}
     # shellcheck disable=SC2016 # the container shell expands these
     if ! out=$(docker exec "$id" sh -c 'cat "$1/hostname" && sha256sum < "$1/hs_ed25519_secret_key" | cut -d " " -f 1' sh "$dir" 2>/dev/null); then
-        fail "tor has no onion key in $dir"
+        echo "tor has no onion key in $dir"
         return 1
     fi
-    { read -r host; read -r key; } <<<"$out"
+    host=${out%%$'\n'*}
+    key=${out##*$'\n'}
     if [[ $host != "$ONION" ]]; then
-        fail "tor serves $host, but the pinned onion is $ONION"
-        return 1
+        echo "tor serves $host, but the pinned onion is $ONION"
+        return 2
     fi
     if [[ $key != "$BASE_KEY" ]]; then
-        fail "tor serves $ONION, but with a key that differs from before the deploy"
-        return 1
+        echo "tor serves $ONION, but with a key that differs from before the deploy"
+        return 2
     fi
-    pass "tor serves $ONION with the same key as before the deploy"
 }
 
-gate() {
-    local t0 rest before after svc
-    local -a changed
-    GATE_DEADLINE=$((SECONDS + GATE_TIMEOUT))
-    log "gate: checks for up to ${GATE_TIMEOUT}s"
+# tor serves the pinned onion name, with the key from before the change
+check_onion() {
+    local why rc
+    gate_turn onion || return 0
+    while :; do
+        rc=0
+        why=$(onion_state) || rc=$?
+        ((rc == 1 && SECONDS < GATE_DEADLINE)) || break
+        sleep 5
+    done
+    case $rc in
+        0) record onion pass "tor serves $ONION with the same key as before the deploy" ;;
+        2) record onion wrong "$why" ;;
+        *) record onion fail "$why" ;;
+    esac
+}
+
+gate_checks() {
+    local height="monerod reports its chain height"
+    if [[ $GATE_MODE == post && -n $PRE_HEIGHT ]]; then
+        height="the chain height is $PRE_HEIGHT or more, as before the change"
+    fi
+    check http "http://$HTTP_HOST/health answers status OK" http_ok "http://$HTTP_HOST/health" "$STATUS_OK"
+    check rpc-443 "RPC on port 443 answers status OK" http_ok "https://$HTTP_HOST:443/get_height" "$STATUS_OK"
+    check rpc-18089 "RPC on port 18089 answers status OK" http_ok "https://$HTTP_HOST:18089/get_height" "$STATUS_OK"
+    check height "$height" height_ok
+    check grafana "Grafana answers, database ok" http_ok "http://$HTTP_HOST/grafana/api/health" '"database"[[:space:]]*:[[:space:]]*"ok"'
+    check rpc-proxy "monerod-rpc-proxy reaches monerod" exec_ok monerod-rpc-proxy http://localhost:18081/get_height
+    check tor "tor has bootstrapped" tor_bootstrapped tor
+    check tor-client "tor-client has bootstrapped" tor_bootstrapped tor-client
+    check_onion
+    check onion-sock "the onion socket exists in tor" onion_sock_exists
+    check onion-http "the onion socket answers plain HTTP" onion_answers http
+    check onion-tls "the onion socket answers TLS" onion_answers https
+}
+
+# One pass: the containers, the checks, then no restart in STABLE_SECONDS
+gate_pass() {
+    local before t0
     check_containers
     before=$(snapshot)
     t0=$SECONDS
-    poll "http://$HTTP_HOST/health answers status OK" http_ok "http://$HTTP_HOST/health" "$STATUS_OK"
-    poll "RPC on port 443 answers status OK" http_ok "https://$HTTP_HOST:443/get_height" "$STATUS_OK"
-    poll "RPC on port 18089 answers status OK" http_ok "https://$HTTP_HOST:18089/get_height" "$STATUS_OK"
-    poll "Grafana answers, database ok" http_ok "http://$HTTP_HOST/grafana/api/health" '"database"[[:space:]]*:[[:space:]]*"ok"'
-    poll "monerod-rpc-proxy reaches monerod" exec_ok monerod-rpc-proxy http://localhost:18081/get_height
-    poll "tor has bootstrapped" tor_bootstrapped tor
-    poll "tor-client has bootstrapped" tor_bootstrapped tor-client
-    check_onion
-    poll "the onion socket exists in tor" docker exec "$(cid tor)" test -S "$ONION_SOCK"
-    poll "the onion socket answers plain HTTP" exec_ok onion-proxy http://localhost/get_height --unix-socket "$ONION_SOCK"
-    poll "the onion socket answers TLS" exec_ok onion-proxy https://localhost/get_height --unix-socket "$ONION_SOCK"
+    gate_checks
+    check_stable "$before" "$t0"
+}
 
-    rest=$((STABLE_SECONDS - (SECONDS - t0)))
-    if ((rest > 0)); then
-        sleep "$rest"
-    fi
-    after=$(snapshot)
-    if [[ $after != "$before" ]]; then
-        mapfile -t changed < <({ diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true; } | awk '/^[<>]/ { print $2 }' | sort -u)
-        for svc in "${changed[@]}"; do
-            fail "$svc restarted during the gate"
-            explain "$(cid "$svc")"
-        done
-        return 1
-    fi
-    pass "no container restarted in $((SECONDS - t0))s"
+# gate <pre|post> <seconds> [label]
+gate() {
+    local id
+    GATE_MODE=$1
+    GATE_DEADLINE=$((SECONDS + $2))
+    log "gate${3:+ $3}: checks for up to $2s"
+    GATE_PASS=1
+    gate_pass
+    [[ $GATE_MODE == post ]] || return 0
+    for id in "${!PRE[@]}"; do
+        if [[ ${PRE[$id]} != pass ]]; then
+            log "gate: now the checks that failed before the change"
+            GATE_PASS=2
+            gate_pass
+            break
+        fi
+    done
 }
 
 # ---------------------------------------------------------------- commands
@@ -624,8 +836,75 @@ preflight() {
     backup_tor_keys || die 3 "the onion key backup failed"
 }
 
+# phase <command...>: runs one part of the deploy in a subshell that stops
+# at the first failed step. Sets PHASE_RC. Call it as a plain command, not
+# in "if" or "||": there bash ignores errexit.
+phase() {
+    set +e
+    (
+        set -e
+        trap 'on_err $? "$BASH_COMMAND"' ERR
+        "$@"
+    )
+    PHASE_RC=$?
+    set -e
+}
+
+forward() {
+    switch_to "$TARGET"
+    gate post "$GATE_TIMEOUT" "after the change"
+}
+
+back() {
+    switch_to "$PREV"
+    gate post "$GATE_TIMEOUT" "after the rollback"
+}
+
+# Reads the results of the gate before the change into PRE and PRE_HEIGHT.
+# A check with two results keeps the worse one.
+load_pre() {
+    local id result
+    PRE=()
+    PRE_HEIGHT=""
+    if [[ -f $GATE_DIR/pre ]]; then
+        while IFS=$'\t' read -r id result _; do
+            case ${PRE[$id]:-pass}/$result in
+                pass/* | fail/wrong) PRE[$id]=$result ;;
+            esac
+        done <"$GATE_DIR/pre"
+    fi
+    if [[ -s $GATE_DIR/height ]]; then
+        PRE_HEIGHT=$(<"$GATE_DIR/height")
+    fi
+}
+
+# Lists the checks of the last gate that failed before the change and
+# still fail. scripts/deploy-ssh.sh reads these lines for the alert.
+summarize_known() {
+    local id result text
+    local -A seen=()
+    [[ -s $GATE_FILE ]] || return 0
+    while IFS=$'\t' read -r id result text; do
+        if [[ $result != pass && -z ${seen[$id]:-} ]] && ! is_regression "$id" "$result"; then
+            seen[$id]=1
+            warn "$KNOWN: $text"
+        fi
+    done <"$GATE_FILE"
+}
+
+# The EXIT trap of deploy: it removes the gate results and writes the exit
+# code for follow
+deploy_exit() {
+    local rc=$?
+    if [[ -n $GATE_DIR ]]; then
+        rm -rf -- "$GATE_DIR"
+    fi
+    if [[ -n $RUN_DIR ]]; then
+        echo "$rc" >"$RUN_DIR/status.tmp" && mv "$RUN_DIR/status.tmp" "$RUN_DIR/status"
+    fi
+}
+
 cmd_deploy() {
-    local rc
     need_target
     need_domain
     need_onion
@@ -633,37 +912,35 @@ cmd_deploy() {
     if [[ -n $RUN_DIR ]]; then
         need_run_dir
         echo "$$" >"$RUN_DIR/pid"
-        trap 'echo "$?" >"$RUN_DIR/status.tmp" && mv "$RUN_DIR/status.tmp" "$RUN_DIR/status"' EXIT
     fi
+    trap deploy_exit EXIT
     preflight
+    GATE_DIR=$(mktemp -d "$STATE_DIR/gate.XXXXXX")
     log "deploy $TARGET to $DOMAIN (the box runs $PREV)"
 
-    set +e
-    (
-        set -e
-        trap 'on_err $? "$BASH_COMMAND"' ERR
-        switch_to "$TARGET"
-        gate
-    )
-    rc=$?
-    set -e
-    if ((rc == 0)); then
+    # The gate before the change only reads. It records which checks pass,
+    # so that a check that fails already cannot cause a rollback later.
+    GATE_FILE=$GATE_DIR/pre
+    phase gate pre "$PRE_GATE_TIMEOUT" "before the change"
+    if ((PHASE_RC != 0)); then
+        warn "the gate before the change stopped early. A check with no result counts as one that passed."
+    fi
+    load_pre
+
+    GATE_FILE=$GATE_DIR/post
+    phase forward
+    if ((PHASE_RC == 0)); then
+        summarize_known
         pass "deployed $TARGET to $DOMAIN"
         exit 0
     fi
 
     fail "the deploy of $TARGET failed. Roll back to $PREV"
-    set +e
-    (
-        set -e
-        trap 'on_err $? "$BASH_COMMAND"' ERR
-        switch_to "$PREV"
-        gate
-    )
-    rc=$?
-    set -e
-    if ((rc == 0)); then
-        fail "rolled back to $PREV, and it passed the gate. $TARGET is not deployed."
+    GATE_FILE=$GATE_DIR/back
+    phase back
+    if ((PHASE_RC == 0)); then
+        summarize_known
+        fail "rolled back to $PREV, and no check failed that passed before the change. $TARGET is not deployed."
         exit 1
     fi
     fail "THE ROLLBACK FAILED. $DOMAIN runs a broken stack and needs a person now."
@@ -726,7 +1003,7 @@ cmd_gate() {
         state=$(volume_key_state)
         read -r _ BASE_KEY _ <<<"$state"
     fi
-    gate
+    gate post "$GATE_TIMEOUT"
 }
 
 cmd_render() {
