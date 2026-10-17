@@ -8,6 +8,8 @@
 #   the automatic rollback (deploy.sh exit 5). Merge a monerod PR alone,
 #   and wait for its deploy to finish before you merge the next PR.
 # - Each other image comes in its own PR.
+# - grafana gets PRs only for minor and patch versions. A major version
+#   can migrate grafana-data one way, so plan it by hand (docs/monitoring.md).
 version: 2
 updates:
   - package-ecosystem: docker-compose
@@ -20,6 +22,9 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      - dependency-name: "grafana/grafana"
+        update-types: ["version-update:semver-major"]
     groups:
       monitoring:
         patterns:

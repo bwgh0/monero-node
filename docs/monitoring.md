@@ -269,7 +269,15 @@ runs on each PR, and a merge to main deploys to both boxes.
 - Each other image comes in its own PR. monerod is never in a group.
 - Only a monerod bump skips the automatic rollback of the deploy (deploy.sh
   exit 5), because the bitmonero volume holds the chain. A person must check a
-  monerod PR. A rollback after a bump of grafana, prometheus or certbot is safe.
+  monerod PR.
+- A rollback after a certbot bump, or a minor or patch bump of prometheus, is
+  safe: the old image reads the data. A grafana bump can migrate grafana-data
+  one way. After a rollback, the old Grafana can then fail to start (deploy.sh
+  exit 2), and the box sends alerts again only after a person restores
+  grafana.db. So deploy a grafana bump alone, with a copy of grafana.db.
+- Dependabot opens grafana PRs only for minor and patch versions. Plan a
+  grafana major version by hand, and test the upgrade on a copy of the
+  grafana.db of a box first.
 - The deploy refuses a monerod image change that ships with a change to
   another service. So merge a monerod PR alone, and wait for its deploy to
   finish before you merge the next PR.
