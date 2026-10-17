@@ -238,6 +238,28 @@ want_head "$sha"
 [[ $(ids) == "$before" ]] || bad "a container changed"
 record "E wrong onion pin: stopped before any change"
 
+step "case L: a key sha256 pin that does not match, and a commit that tracks .env"
+t0=$SECONDS
+good=$sha
+before=$(ids)
+env_sum=$(sha256sum <"$box/.env")
+set +e
+env "${deploy_env[@]}" bash "$root/scripts/deploy.sh" deploy --target "$good" --domain "$domain" --onion "$onion" \
+    --key-sha256 "$(printf '%064d' 0)" >"$work/last.log" 2>&1
+rc=$?
+set -e
+want_rc 3
+grep -q -- 'does not have the sha256 from --key-sha256' "$work/last.log" || bad "no clear error for a wrong --key-sha256"
+sha=$(change "track .env" sh -c 'printf "DOMAIN=x\n" > .env && git add -f .env')
+deploy deploy "$sha"
+want_rc 3
+grep -q -- 'tracks .env' "$work/last.log" || bad "no clear error for a commit that tracks .env"
+want_head "$good"
+[[ $(sha256sum <"$box/.env") == "$env_sum" ]] || bad "the box .env changed"
+[[ $(ids) == "$before" ]] || bad "a container changed"
+sha=$good
+record "L wrong --key-sha256, and a commit that tracks .env: both stopped before any change, .env kept"
+
 step "case G: a change to monerod only. The rpc proxy must follow the new monerod."
 t0=$SECONDS
 proxy_started=$(started monerod-rpc-proxy)
@@ -257,11 +279,24 @@ record "G monerod change: deployed, rpc proxy restarted and the gate passed ($mo
 
 step "onion key backups"
 mapfile -t made < <(find "$backups" -name 'tor-keys-????????T??????Z.tgz' | sort)
-((${#made[@]} == 3)) || bad "${#made[@]} rotating backups, expected 3 (BACKUP_KEEP=3 after 6 deploys)"
+((${#made[@]} == 3)) || bad "${#made[@]} rotating backups, expected 3 (BACKUP_KEEP=3)"
 [[ -e $backups/tor-keys-2026-10-16.tgz ]] || bad "rotation removed the hand-made backup"
 for f in "${made[@]}"; do
     [[ $(stat -c %a "$f") == 600 ]] || bad "$f has mode $(stat -c %a "$f")"
 done
 [[ $(tar -xzOf "${made[-1]}" ./monerod/hs_ed25519_secret_key | sha256sum | cut -d ' ' -f 1) == "$key" ]] ||
     bad "the newest backup does not hold the onion key"
-results+=("PASS  backups: 3 kept of 6 (BACKUP_KEEP=3), mode 600, newest holds the key, hand-made backup kept")
+results+=("PASS  backups: 3 kept (BACKUP_KEEP=3), mode 600, newest holds the key, hand-made backup kept")
+
+step "cert-reload waits for the deploy lock"
+lock=/var/lib/monero-node-deploy/lock
+install -d -m 700 "${lock%/*}"
+flock "$lock" sleep 6 &
+holder=$!
+sleep 1
+t0=$SECONDS
+bash "$root/scripts/cert-reload.sh" >/dev/null 2>&1 || true # no cert here, so it stops after the lock
+waited=$((SECONDS - t0))
+wait "$holder"
+((waited >= 4)) || bad "cert-reload did not wait for the deploy lock (${waited}s)"
+results+=("PASS  cert-reload waited ${waited}s for the deploy lock")

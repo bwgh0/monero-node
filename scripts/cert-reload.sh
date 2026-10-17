@@ -5,6 +5,16 @@
 # Installed as /etc/cron.daily/monerod-cert-reload by setup.sh and deploy.sh.
 set -euo pipefail
 
+# scripts/deploy.sh holds this lock while it deploys and checks the stack.
+# Wait for it, so this restart never lands in the middle of a deploy.
+LOCK=/var/lib/monero-node-deploy/lock
+install -d -m 700 "${LOCK%/*}"
+exec 9>"$LOCK"
+if ! flock -w 1800 9; then
+    echo "monerod-cert-reload: a deploy held $LOCK for 30 minutes. The next daily run tries again." >&2
+    exit 1
+fi
+
 CERT=$(compgen -G "/var/lib/docker/volumes/monero-node_certbot-conf/_data/live/*/fullchain.pem" | head -1)
 [ -n "$CERT" ] || exit 0
 

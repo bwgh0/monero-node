@@ -41,9 +41,12 @@ TOR_LOG_GRACE=${TOR_LOG_GRACE:-21600}   # tor up longer than this may have rotat
 TOR_USER=104:107                        # owns the onion keys on the boxes
 RUN_ID='^([0-9]+|local)-[0-9]+$'        # run dir names: <workflow run id>-<attempt>, or local-<n>
 STATUS_OK='"status"[[:space:]]*:[[:space:]]*"OK"'
-SELF=$(readlink -f "${BASH_SOURCE[0]}")
+# Files that only the box has. No deployed commit may track them.
+BOX_FILES=(.env aws docker-compose.override.yml tor-keys)
+# Not a file when bash reads this script from stdin ("bash -s -- gate ...")
+SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" || true)
 
-CMD="" TARGET="" DOMAIN="" ONION="" KEY_SHA256="" RUN_DIR=""
+CMD="" TARGET="" DOMAIN="" ONION="" KEY_SHA256="" RUN_DIR="" COMPOSE_VERSION=""
 PREV="" BASE_KEY="" GATE_DEADLINE=0 ONION_SOCK=""
 PROJECT="" TOR_IMAGE="" TOR_KEYS_VOLUME="" CERTS_VOLUME="" CERTBOT_IMAGE=""
 SERVICES=() ARGS=()
@@ -139,6 +142,8 @@ parse_args() {
 need_target() { [[ $TARGET =~ ^[0-9a-f]{40}$ ]] || die 3 "--target must be a full 40 character commit sha"; }
 need_domain() { [[ $DOMAIN =~ ^[a-z0-9.-]+$ ]] || die 3 "--domain is missing or not a host name"; }
 need_onion() { [[ $ONION =~ ^[a-z2-7]{56}\.onion$ ]] || die 3 "--onion is missing or not a v3 onion name"; }
+# --key-sha256 is optional: the sha256 of hs_ed25519_secret_key that the box must have
+check_key_sha256() { [[ -z $KEY_SHA256 || $KEY_SHA256 =~ ^[0-9a-f]{64}$ ]] || die 3 "--key-sha256 must be 64 hex characters"; }
 # --run-dir must be $STATE_DIR/runs/<run id>, as deploy-ssh.sh makes it, with
 # no symlink, no "." and no ".." in it. prune_runs deletes the old dirs next
 # to it, so any other path could delete dirs that are not runs.
@@ -555,8 +560,18 @@ gate() {
 
 # ---------------------------------------------------------------- commands
 
+# docker compose 2.22 or newer. Sets COMPOSE_VERSION.
+compose_ok() {
+    local major minor
+    COMPOSE_VERSION=$(docker compose version --short 2>/dev/null) || COMPOSE_VERSION=""
+    COMPOSE_VERSION=${COMPOSE_VERSION#v}
+    IFS=. read -r major minor _ <<<"$COMPOSE_VERSION"
+    [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || return 1
+    ((major > 2 || (major == 2 && minor >= 22)))
+}
+
 preflight() {
-    local env_domain avail dir host key owner mode state
+    local env_domain avail dir host key owner mode state commit tracked
     cd "$REPO_DIR" 2>/dev/null || die 3 "no checkout at $REPO_DIR"
     install -d -m 700 "$STATE_DIR" "$BACKUP_DIR"
     exec 9>"$STATE_DIR/lock"
@@ -569,7 +584,11 @@ preflight() {
     env_domain=$(env_value DOMAIN)
     [[ $env_domain == "$DOMAIN" ]] || die 3 "this box is ${env_domain:-unknown}, but the deploy is for $DOMAIN"
     docker info >/dev/null 2>&1 || die 3 "docker does not answer"
-    log "$(docker compose version)"
+    if ! compose_ok; then
+        die 3 "docker compose ${COMPOSE_VERSION:-(no version)} is too old or missing. The deploy needs 2.22 or newer:" \
+            "pull --policy came in 2.22, and up --wait-timeout and depends_on restart came in 2.17."
+    fi
+    log "docker compose $COMPOSE_VERSION"
     for dir in "$REPO_DIR" "$BACKUP_DIR" "$STATE_DIR"; do
         avail=$(df -Pk "$dir" | awk 'NR == 2 { print $4 }')
         ((${avail:-0} > 1048576)) || die 3 "less than 1 GiB is free for $dir"
@@ -579,14 +598,26 @@ preflight() {
     git fetch -q origin || die 3 "git fetch failed"
     git cat-file -e "$TARGET^{commit}" 2>/dev/null || die 3 "commit $TARGET is not in origin"
     git merge-base --is-ancestor "$TARGET" origin/main || die 3 "commit $TARGET is not on origin/main"
+    # A commit that tracks a file that only the box has would replace the
+    # box copy, and a rollback from it would delete that file (.env holds
+    # the secrets). So neither commit may track one.
+    for commit in "$PREV" "$TARGET"; do
+        tracked=$(git ls-tree -r --name-only "$commit" -- "${BOX_FILES[@]}") || die 3 "cannot list the files of $commit"
+        if [[ -n $tracked ]]; then
+            die 3 "commit $commit tracks $(paste -sd ' ' <<<"$tracked"). Only the box may have these files."
+        fi
+    done
 
     load_compose_facts || die 3 "docker compose config failed for $PREV"
     state=$(volume_key_state 2>/dev/null) || die 3 "cannot read the onion key in volume $TOR_KEYS_VOLUME"
     read -r host key owner mode <<<"$state"
     [[ $host == "$ONION" ]] || die 3 "the onion key on this box is for ${host:-nothing}, but the pinned onion is $ONION"
     [[ $key =~ ^[0-9a-f]{64}$ ]] || die 3 "cannot hash the onion key"
+    if [[ -n $KEY_SHA256 && $key != "$KEY_SHA256" ]]; then
+        die 3 "the onion key on this box does not have the sha256 from --key-sha256"
+    fi
     BASE_KEY=$key
-    pass "the onion key on this box is for $ONION"
+    pass "the onion key on this box is for $ONION${KEY_SHA256:+, with the sha256 from --key-sha256}"
     if [[ "$owner $mode" != "$TOR_USER 700" ]]; then
         warn "the onion key dir is $owner mode $mode, expected $TOR_USER mode 700"
     fi
@@ -598,6 +629,7 @@ cmd_deploy() {
     need_target
     need_domain
     need_onion
+    check_key_sha256
     if [[ -n $RUN_DIR ]]; then
         need_run_dir
         echo "$$" >"$RUN_DIR/pid"
@@ -640,6 +672,7 @@ cmd_deploy() {
 
 cmd_start() {
     need_run_dir
+    [[ -f $SELF ]] || die 3 "start runs deploy.sh again, so it needs it as a file, not on stdin"
     install -d -m 700 "$RUN_DIR"
     [[ ! -e $RUN_DIR/pid ]] || die 3 "a deploy already started in $RUN_DIR. Use follow."
     setsid nohup bash "$SELF" deploy "${ARGS[@]}" >"$RUN_DIR/log" 2>&1 </dev/null &
@@ -684,7 +717,8 @@ prune_runs() {
 cmd_gate() {
     local state
     need_onion
-    cd "$REPO_DIR"
+    check_key_sha256
+    cd "$REPO_DIR" 2>/dev/null || die 3 "no checkout at $REPO_DIR"
     load_compose_facts
     if [[ -n $KEY_SHA256 ]]; then
         BASE_KEY=$KEY_SHA256
