@@ -191,6 +191,10 @@ Two control checks protect against false alerts:
 
 ### When it sends
 
+Telegram is on only when the repository variable `WATCHDOG_LIVE` is `1`.
+Without it, each run writes the checks and the message to the job summary,
+sends nothing and keeps its state, with no failure marked as sent.
+
 The watchdog sends only what the boxes cannot send:
 
 - A failed check of a box whose Grafana answers: the box sends the alert, so
@@ -206,8 +210,9 @@ a failure that the watchdog sent. The message is plain text and starts with
 "monero-node watchdog (GitHub)".
 
 When the Telegram send fails, the run fails (red). GitHub then sends an email
-about the failed run, and the next run sends the message again. A run also
-fails when the TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is missing.
+about the failed run, and the next run sends the message again. With
+`WATCHDOG_LIVE` at `1`, a run also fails when the TELEGRAM_BOT_TOKEN or
+TELEGRAM_CHAT_ID secret is missing.
 
 ### State
 

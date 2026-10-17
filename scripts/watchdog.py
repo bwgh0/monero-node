@@ -15,12 +15,18 @@ the other box. So the watchdog sends only what the boxes cannot send:
 One Telegram message per run holds the new failures, the reminders (every
 4 hours) and the recoveries. docs/monitoring.md explains the checks.
 
+Telegram is on only when WATCHDOG_LIVE is 1 (a repository variable). Else
+each run writes the checks to the job summary, with the message that a live
+run sends. It marks nothing as sent, so a failure that lasts until Telegram
+is on goes out as new in the first live run.
+
 The run logs are public. This script prints no IPs, no tokens, no chat ID,
 no onion names and no response bodies. A curl error shows as a short name
 (timeout, connection refused), never as curl text, which can hold an IP.
 
 Usage: watchdog.py --state FILE [--tor-container NAME] [--socks ADDR] [--dry-run]
-Environment: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID. For tests:
+Environment: WATCHDOG_LIVE, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (needed
+only when WATCHDOG_LIVE is 1), GITHUB_STEP_SUMMARY (set by GitHub). For tests:
 TELEGRAM_API, WATCHDOG_TARGETS (JSON in place of monitoring/prometheus.yml),
 WATCHDOG_CONTROL_URL, WATCHDOG_BUDGET, WATCHDOG_RETRY_WAIT and NOW.
 """
@@ -384,6 +390,25 @@ def send(text, token, chat):
     return False
 
 
+def summary(results, state, text, outcome):
+    """Writes the checks and the message to the job summary of the run. It
+    holds the same as the logs: check ids, status and short error names."""
+    lines = ["### Watchdog", "", outcome, "", "| Check | Status | Detail |", "|---|---|---|"]
+    for cid in sorted(results):
+        status, detail, _ = results[cid]
+        if status == "fail" and state["checks"].get(cid, {}).get("covered"):
+            status = "fail, a box sends the alert"
+        lines.append(f"| {cid} | {status} | {detail} |")
+    if text:
+        lines += ["", "```text", text, "```"]
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        print("\n".join(lines))
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def load_state(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -411,8 +436,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print the message; send nothing, write no state")
     args = ap.parse_args()
     now = float(os.environ.get("NOW") or time.time())
+    live = os.environ.get("WATCHDOG_LIVE") == "1"
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not args.dry_run and not (token and chat):
+    if live and not args.dry_run and not (token and chat):
         log("::error::Set the TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID repository secrets.")
         return 1
     boxes = load_targets()
@@ -442,18 +468,26 @@ def main():
         if text:
             print("----- message\n" + text)
         return 0
+    if not live:
+        save_state(args.state, state)
+        summary(results, state, text, "Telegram is off: the repository variable WATCHDOG_LIVE is not 1. "
+                + ("A live run sends this message:" if text else "A live run sends nothing."))
+        log("Telegram is off (WATCHDOG_LIVE is not 1). The result is in the job summary.")
+        return 0
     if text and not send(text, token, chat):
         # Keep the cleared checks, so that the next run sends them again.
         # The new and the reminded checks get no send time.
         for cid, st in cleared:
             state["checks"][cid] = st
         save_state(args.state, state)
+        summary(results, state, text, "The Telegram send failed. The next run tries again.")
         return 1
     for cid in new:
         state["checks"][cid]["sent"] = now
     for cid in new + remind:
         state["checks"][cid]["last_sent"] = now
     save_state(args.state, state)
+    summary(results, state, text, "Sent to Telegram:" if text else "Nothing to send.")
     if text:
         log("sent")
     return 0

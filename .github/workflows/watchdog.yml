@@ -4,7 +4,8 @@ name: Watchdog
 # height, Grafana and both onions over Tor. It sends a Telegram message
 # only for what the boxes cannot send: see scripts/watchdog.py and
 # docs/monitoring.md. The state (what failed and what went out) moves from
-# run to run as an artifact.
+# run to run as an artifact. Telegram is on only when the repository variable
+# WATCHDOG_LIVE is 1. Else each run writes its result to the job summary.
 #
 # GitHub turns off the schedules of a public repo after 60 days without a
 # commit. The weekly keepalive job turns this workflow on again, which
@@ -63,6 +64,7 @@ jobs:
 
       - name: Check both boxes
         env:
+          WATCHDOG_LIVE: ${{ vars.WATCHDOG_LIVE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
