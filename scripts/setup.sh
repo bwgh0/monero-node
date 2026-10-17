@@ -128,6 +128,11 @@ echo "==> Installing docker-metrics cron..."
 install -d -m 755 /var/lib/node-exporter/textfile
 install -m 644 "${SCRIPT_DIR}/scripts/docker-metrics.cron" /etc/cron.d/monero-node-docker-metrics
 
+# Capacity metrics every minute and the weekly digest (docs/capacity.md)
+echo "==> Installing capacity cron..."
+install -d -m 755 /var/lib/monero-node-capacity
+install -m 644 "${SCRIPT_DIR}/scripts/capacity.cron" /etc/cron.d/monero-node-capacity
+
 # Tor runs as uid 104. That uid owns the onion keys on the existing boxes.
 # A new tor-keys volume belongs to root, so give it to uid 104 first.
 # This touches only the volume root, never the keys inside it.

@@ -349,6 +349,11 @@ host_setup() {
         install -d -m 755 /var/lib/node-exporter/textfile
         install -m 644 scripts/docker-metrics.cron /etc/cron.d/monero-node-docker-metrics
     fi
+    # Capacity metrics and the weekly digest (docs/capacity.md)
+    if [[ -f scripts/capacity.cron ]]; then
+        install -d -m 755 /var/lib/node-exporter/textfile /var/lib/monero-node-capacity
+        install -m 644 scripts/capacity.cron /etc/cron.d/monero-node-capacity
+    fi
 }
 
 # Content hash of a file, or of all files in a directory

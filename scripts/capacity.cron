@@ -1,0 +1,6 @@
+# Capacity metrics every minute and the weekly digest on Monday at 13:00 UTC
+# (see scripts/capacity-metrics.sh and scripts/capacity-report.py).
+# Installed as /etc/cron.d/monero-node-capacity by setup.sh and the deploy workflow.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * root bash /opt/monero-node/scripts/capacity-metrics.sh >/dev/null 2>&1
+0 13 * * 1 root python3 /opt/monero-node/scripts/capacity-report.py >/dev/null 2>&1

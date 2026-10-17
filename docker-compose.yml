@@ -143,6 +143,12 @@ services:
       - /var/lib/tor/hidden_service/monerod
       - --HiddenServicePort
       - 18089 unix:/run/onion/monerod.sock
+      # Onion-service metrics for scripts/capacity-metrics.sh. Loopback only:
+      # the host script reads it through nsenter and drops the onion label.
+      - --MetricsPort
+      - 127.0.0.1:9035
+      - --MetricsPortPolicy
+      - accept 127.0.0.1
     tmpfs:
       - /run/tor:uid=104,gid=107,mode=0700
     volumes:
@@ -206,7 +212,14 @@ services:
       - --no-collector.nfs
       - --no-collector.nfsd
       - --no-collector.tapestats
-      # Container state from scripts/docker-metrics.sh (cron, every minute)
+      # With --path.procfs these read the namespace of this container, not
+      # the host. scripts/capacity-metrics.sh writes the host network data.
+      - --no-collector.netdev
+      - --no-collector.netstat
+      - --no-collector.sockstat
+      - --no-collector.conntrack
+      # Container state from scripts/docker-metrics.sh and capacity data from
+      # scripts/capacity-metrics.sh (cron, every minute)
       - --collector.textfile.directory=/host/root/var/lib/node-exporter/textfile
     volumes:
       - /proc:/host/proc:ro
@@ -330,7 +343,10 @@ services:
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=30d
+      # 6 months of history for the weekly capacity digest. About 110 MB per
+      # 30 days today, so the size cap is only a guard.
+      - --storage.tsdb.retention.time=180d
+      - --storage.tsdb.retention.size=2GB
       - --web.listen-address=:9091
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
