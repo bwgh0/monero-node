@@ -100,7 +100,7 @@ services:
       driver: "none"
 
   certbot:
-    image: certbot/dns-route53:v3.1.0
+    image: certbot/dns-route53:v5.8.0
     container_name: certbot
     restart: unless-stopped
     volumes:
