@@ -108,7 +108,7 @@ case $rc in
     2) echo "::error title=$domain ROLLBACK FAILED::The deploy failed, and the rollback failed too. The box needs a person now." ;;
     3) echo "::error title=$domain not deployed::The deploy stopped before it changed anything. See the log." ;;
     4) echo "::error title=$domain not deployed::The deploy did not start (SSH)." ;;
-    5) echo "::error title=$domain MANUAL ACTION NEEDED::The deploy failed after a new image for a service that keeps data, like monerod. A rollback could run the old image on migrated data, so the box stays on $commit. A person must check it now." ;;
+    5) echo "::error title=$domain MANUAL ACTION NEEDED::The deploy failed after a service that keeps data, like monerod, started on a new image. A rollback could run the old image on migrated data, so the box stays on $commit. A person must check it now." ;;
     *) echo "::error title=$domain unknown result::No result from the box (exit $rc). See the log and the run dir $run_dir on the box." ;;
 esac
 exit "$rc"

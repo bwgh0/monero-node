@@ -26,6 +26,8 @@ wrong_onion=zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion
 # Case J: a "new" monerod image, a local tag of the one in docker-compose.yml
 monerod_image=ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5
 new_monerod=mnsim-local/simple-monerod:sim-j
+# Case M: a new monerod image that cannot start
+broken_monerod=mnsim-local/simple-monerod:sim-m
 results=()
 rc=0
 
@@ -40,7 +42,8 @@ finish() {
         step "tear down"
         teardown
     fi
-    docker rmi "$new_monerod" >/dev/null 2>&1 || true
+    docker rm -fv mnsim-broken-monerod >/dev/null 2>&1 || true
+    docker rmi "$new_monerod" "$broken_monerod" >/dev/null 2>&1 || true
     rm -rf "$work"
     step "results"
     printf '%s\n' "${results[@]}"
@@ -348,7 +351,33 @@ docker compose exec -T monerod-rpc-proxy curl -sf --max-time 10 http://localhost
 sha=$good
 record "I new fault: the rpc proxy check regressed, rolled back to H, the proxy works again"
 
-step "case J: a new monerod image and a broken tor: no automatic rollback"
+step "case M: a new monerod image that never starts rolls back, because its data is as before"
+t0=$SECONDS
+good=$sha
+# A copy of the monerod image whose entrypoint does not exist
+docker create --name mnsim-broken-monerod "$monerod_image" >/dev/null
+docker commit --change 'ENTRYPOINT ["/sim-no-monerod"]' mnsim-broken-monerod "$broken_monerod" >/dev/null
+docker rm -v mnsim-broken-monerod >/dev/null
+sha=$(change_from "$good" "a new monerod image that cannot start" sed -i "s|image: $monerod_image|image: $broken_monerod|" docker-compose.yml)
+[[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c "image: $broken_monerod") == 1 ]] || bad "the case M change did not apply"
+deploy deploy "$sha"
+want_rc 1
+want_head "$good"
+want_all_running
+want_same_onion
+grep -q "WARN  monerod keeps data in a volume, and its image changes from $monerod_image to $broken_monerod" "$work/last.log" ||
+    bad "no warning before the monerod image change"
+grep -q "monerod did not start on its new image $broken_monerod, so its data is as before" "$work/last.log" ||
+    bad "the log does not say that the new monerod never started"
+grep -q 'Roll back to' "$work/last.log" || bad "it did not roll back"
+! grep -q 'MANUAL ACTION NEEDED' "$work/last.log" || bad "it asked for manual action, but the new monerod never started"
+[[ $(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -aq monerod)") == "$monerod_image" ]] ||
+    bad "monerod does not run its old image after the rollback"
+monerod_started=$(started monerod)
+sha=$good
+record "M new monerod image that never starts: rolled back (exit 1) to H, monerod runs its old image, onion and key same"
+
+step "case J: the new monerod image starts, then tor fails: no automatic rollback"
 t0=$SECONDS
 docker tag "$monerod_image" "$new_monerod"
 sha=$(change "a new monerod image, and a broken tor entrypoint" sed -i -e "s|image: $monerod_image|image: $new_monerod|" \
@@ -361,13 +390,15 @@ want_rc 5
 want_head "$sha"
 grep -q "WARN  monerod keeps data in a volume, and its image changes from $monerod_image to $new_monerod" "$work/last.log" ||
     bad "no warning before the monerod image change"
+grep -q "FAIL  monerod started on its new image $new_monerod at " "$work/last.log" ||
+    bad "the box log does not say that monerod started on its new image"
 grep -q 'FAIL  MANUAL ACTION NEEDED on' "$work/last.log" || bad "the box log does not say MANUAL ACTION NEEDED"
 grep -q 'MANUAL ACTION NEEDED::' "$work/last.log" || bad "deploy-ssh.sh did not report MANUAL ACTION NEEDED"
 ! grep -q 'Roll back to' "$work/last.log" || bad "it rolled back after a new monerod image"
 [[ $(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -aq monerod)") == "$new_monerod" ]] ||
     bad "monerod does not run the new image"
 j=$sha
-record "J new monerod image and broken tor: exit 5, MANUAL ACTION NEEDED, no rollback, the box stays on J"
+record "J new monerod image started, then tor failed: exit 5, MANUAL ACTION NEEDED, no rollback, the box stays on J"
 
 step "case J2: from J, a good change while tor still fails: no rollback"
 t0=$SECONDS

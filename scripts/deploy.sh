@@ -33,10 +33,11 @@
 #   2  failed, and the rollback failed too. The box needs a person now.
 #   3  stopped before any change (lock, wrong box, onion key, backup, fetch, bad --run-dir)
 #   4  (follow) no deploy started in --run-dir
-#   5  MANUAL ACTION NEEDED. It failed after a new image for a service that
-#      keeps data in a volume, like monerod. The old image could fail on
-#      data that the new image migrated, so there was no automatic
-#      rollback. The box stays on --target.
+#   5  MANUAL ACTION NEEDED. It failed after a service that keeps data in a
+#      volume, like monerod, started on a new image. The old image could
+#      fail on data that the new image migrated, so there was no automatic
+#      rollback. The box stays on --target. When the new image did not
+#      start, the data is as before, and the deploy rolls back (exit 1).
 #
 # The tor-keys volume is only read, by a throwaway read-only container.
 # Nothing here writes to it or removes it, not even in a rollback.
@@ -63,10 +64,21 @@ STATUS_OK='"status"[[:space:]]*:[[:space:]]*"OK"'
 KNOWN="already failing before the change"
 # Files that only the box has. No deployed commit may track them.
 BOX_FILES=(.env aws docker-compose.override.yml tor-keys)
-# Volumes that no image migrates, so a rollback is safe with them: tor
-# reads its keys as they are, onion-sock holds only a socket, and
-# certbot-www holds only ACME challenge files.
-ROLLBACK_SAFE_VOLUMES=(tor-keys onion-sock certbot-www)
+# Volumes that allow an automatic rollback after a new image ran on them.
+# Any other volume that a service mounts read-write holds data that a new
+# image can migrate. Then a failure after that image started gets no
+# automatic rollback (exit 5). Today that is only bitmonero, the chain.
+#  - tor-keys, onion-sock, certbot-www: no image migrates them. tor reads
+#    its keys as they are, onion-sock holds only a socket, and certbot-www
+#    holds only ACME challenge files.
+#  - certbot-conf: certificates, and renewal files that an older certbot
+#    can still read.
+#  - prometheus-data, grafana-data: a newer Prometheus or Grafana can
+#    migrate them one way. But they hold only monitoring data. The
+#    dashboards, alert rules and data source come from the repo. When the
+#    old image cannot run on the data after a rollback, the gate sees it
+#    (exit 2 and an alert), while RPC and the onion run the old commit.
+ROLLBACK_OK_VOLUMES=(tor-keys onion-sock certbot-www certbot-conf prometheus-data grafana-data)
 # Not a file when bash reads this script from stdin ("bash -s -- gate ...")
 SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" || true)
 
@@ -357,26 +369,28 @@ repo_binds() {
 
 # "<service> <image> <1 when it keeps data>" for each service. A service
 # keeps data when it mounts a named volume read-write that is not in
-# ROLLBACK_SAFE_VOLUMES.
+# ROLLBACK_OK_VOLUMES.
 service_images() {
     docker compose config --format json | python3 -c '
 import json, sys
-safe = set(sys.argv[1:])
+ok = set(sys.argv[1:])
 c = json.load(sys.stdin)
 for name, svc in sorted(c["services"].items()):
-    data = any(v.get("type") == "volume" and v.get("source") not in safe and not v.get("read_only")
+    data = any(v.get("type") == "volume" and v.get("source") not in ok and not v.get("read_only")
                for v in svc.get("volumes") or [])
     print(name, svc.get("image") or "-", int(data))
-' "${ROLLBACK_SAFE_VOLUMES[@]}"
+' "${ROLLBACK_OK_VOLUMES[@]}"
 }
 
 # mark_stateful <service images before the checkout>: writes each service
 # that keeps data and gets another image to $GATE_DIR/stateful. It runs
-# before the first container changes. After it, a failed deploy gets no
-# automatic rollback, because the new image may migrate the data.
+# just before the first container changes, and writes that time to
+# $GATE_DIR/since. A failure after one of these services started on its
+# new image gets no automatic rollback (see new_image_ran).
 mark_stateful() {
     local now svc image data old new
     local -A was_image=() was_data=()
+    date +%s >"$GATE_DIR/since"
     now=$(service_images)
     while read -r svc image data; do
         [[ -n $svc ]] || continue
@@ -391,8 +405,51 @@ mark_stateful() {
         fi
     done <<<"$now"
     while read -r svc old new; do
-        warn "$svc keeps data in a volume, and its image changes from $old to $new. From here on, a failure gets no automatic rollback."
+        warn "$svc keeps data in a volume, and its image changes from $old to $new. When the deploy fails after the new image starts, there is no automatic rollback."
     done <"$GATE_DIR/stateful"
+}
+
+# True when a service in $GATE_DIR/stateful has a container with its new
+# image (.Config.Image) that started after the change. Only then can the
+# new image have migrated the data. Compose stops the old container before
+# it creates the new one. So a failed create or start leaves the service
+# down with its data as before, and a rollback is safe. When docker cannot
+# tell, the service counts as started.
+new_image_ran() {
+    local since svc old new ids id image started t ran found
+    since=$(cat "$GATE_DIR/since" 2>/dev/null) || since=0
+    [[ $since =~ ^[0-9]+$ ]] || since=0
+    ran=0
+    while read -r svc old new; do
+        found=0
+        if ids=$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" \
+            --filter "label=com.docker.compose.oneoff=False" \
+            --filter "label=com.docker.compose.service=$svc"); then
+            # Also a container that compose created under a temporary name
+            for id in $ids; do
+                if ! read -r image started < <(docker inspect -f '{{.Config.Image}} {{.State.StartedAt}}' "$id" 2>/dev/null); then
+                    fail "cannot inspect container $id of $svc, so it counts as started on $new"
+                    found=1
+                    continue
+                fi
+                [[ $image == "$new" && $started != 0001-01-01T* ]] || continue
+                t=$(date -d "$started" +%s 2>/dev/null) || t=$since
+                if ((t >= since)); then
+                    fail "$svc started on its new image $new at $started, so it may have migrated its data"
+                    found=1
+                fi
+            done
+        else
+            fail "cannot list the containers of $svc, so it counts as started on $new"
+            found=1
+        fi
+        if ((found)); then
+            ran=1
+        else
+            log "$svc did not start on its new image $new, so its data is as before"
+        fi
+    done <"$GATE_DIR/stateful"
+    ((ran))
 }
 
 # Every service has a container with the compose config of the checkout
@@ -966,7 +1023,6 @@ deploy_exit() {
 }
 
 cmd_deploy() {
-    local svc old new
     need_target
     need_domain
     need_onion
@@ -998,11 +1054,11 @@ cmd_deploy() {
     fi
 
     if [[ -s $GATE_DIR/stateful ]]; then
-        while read -r svc old new; do
-            fail "$svc keeps data in a volume, and the deploy changed its image from $old to $new"
-        done <"$GATE_DIR/stateful"
-        fail "MANUAL ACTION NEEDED on $DOMAIN. The deploy of $TARGET failed, and the old image could fail on data that the new image migrated. So there was no automatic rollback, and the box stays on $TARGET."
-        exit 5
+        if new_image_ran; then
+            fail "MANUAL ACTION NEEDED on $DOMAIN. The deploy of $TARGET failed after a service that keeps data started on its new image. The old image could fail on data that the new image migrated. So there was no automatic rollback, and the box stays on $TARGET."
+            exit 5
+        fi
+        log "no service that keeps data started on its new image, so a rollback is safe"
     fi
 
     fail "the deploy of $TARGET failed. Roll back to $PREV"

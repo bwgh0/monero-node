@@ -137,7 +137,7 @@ jobs:
               failure/2) echo "FAILED, and the ROLLBACK FAILED. The box needs a person now." ;;
               failure/3) echo "stopped before any change" ;;
               failure/4) echo "did not start (SSH)" ;;
-              failure/5) echo "FAILED, MANUAL ACTION NEEDED. A service that keeps data (like monerod) got a new image, so there was no automatic rollback. The box runs the new commit." ;;
+              failure/5) echo "FAILED, MANUAL ACTION NEEDED. A service that keeps data (like monerod) started on a new image, so there was no automatic rollback. The box runs the new commit." ;;
               *) echo "$1, no result from the box. See the run log." ;;
             esac
           }
