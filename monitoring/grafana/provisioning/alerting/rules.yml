@@ -9,6 +9,7 @@ groups:
       - uid: alert-node-down
         title: Node Down
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -38,15 +39,23 @@ groups:
                     type: lt
                     params: [1]
               refId: C
-        for: 2m
+        # Only a down monero-exporter fires this rule: the scrape fails or
+        # times out. When monerod stops, the exporter still answers with
+        # status 200, so up stays 1. Container Down and RPC Endpoint Down
+        # cover a monerod stop. 5m rides over a restart of the exporter,
+        # for example in a deploy.
+        for: 5m
         annotations:
-          summary: "monerod exporter is down — node may be offline"
+          summary: "monero-exporter does not answer, so the monerod metrics are blind"
+          affected: "Monitoring only. Node Falling Behind, Node Height Stale and the monerod dashboards are blind."
+          first_step: "Run docker compose ps monero-exporter monerod-rpc-proxy and docker logs --tail 50 monero-exporter."
         labels:
           severity: critical
 
       - uid: alert-cpu-high
         title: CPU Usage High
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -76,12 +85,15 @@ groups:
         for: 10m
         annotations:
           summary: "CPU usage above 90% for 10 minutes"
+          affected: "All users of this box when the load slows the RPC"
+          first_step: "Run docker stats --no-stream to find the busy container."
         labels:
           severity: warning
 
       - uid: alert-ram-high
         title: RAM Usage High
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -111,12 +123,15 @@ groups:
         for: 5m
         annotations:
           summary: "RAM usage above 90% for 5 minutes"
+          affected: "All users of this box when the kernel kills a process for lack of memory"
+          first_step: "Run docker stats --no-stream and free -m."
         labels:
           severity: warning
 
       - uid: alert-disk-high
         title: Disk Usage Critical
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -145,13 +160,16 @@ groups:
               refId: C
         for: 5m
         annotations:
-          summary: "Disk usage above 85% — monerod will crash if disk fills"
+          summary: "Disk usage above 85%. monerod stops when the disk is full."
+          affected: "Nobody yet. When the disk is full: clearnet RPC users and onion users."
+          first_step: "Run docker system df and du -sh /var/lib/docker/volumes/*, then docker image prune -f."
         labels:
           severity: critical
 
       - uid: alert-node-behind
         title: Node Falling Behind
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -184,12 +202,15 @@ groups:
         for: 30m
         annotations:
           summary: "Node is more than 100 blocks behind for 30+ minutes"
+          affected: "Clearnet RPC users and onion users. Wallets get old data."
+          first_step: "Compare the height with the other box, then check the P2P peers: docker logs --tail 50 monerod."
         labels:
           severity: warning
 
       - uid: alert-system-exporter-down
         title: System Exporter Down
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -219,12 +240,16 @@ groups:
         for: 2m
         annotations:
           summary: "System metrics exporter is down"
+          affected: "Monitoring only. The CPU, RAM, disk, container and capacity alerts are blind."
+          first_step: "Run docker compose ps node-exporter and docker compose up -d node-exporter."
         labels:
           severity: critical
 
       - uid: alert-exporter-blind
         title: Monero Exporter Blind
         condition: C
+        execErrState: KeepLast
+        noDataState: OK
         data:
           - refId: A
             relativeTimeRange:
@@ -234,7 +259,18 @@ groups:
             model:
               # Up is 1 even when the exporter cannot reach monerod, so count the
               # monerod series instead. vector(0) keeps the result from going empty.
-              expr: count(monero_info_height{job="monerod"}) or vector(0)
+              # Quiet while all RPC probes of this box fail: RPC Endpoint Down
+              # covers a monerod outage (see probe-rules.yml). Quiet while the
+              # exporter is down: Node Down covers it. Then the result is
+              # empty, and noDataState OK makes the rule Normal.
+              expr: >-
+                (count(monero_info_height{job="monerod"}) or vector(0))
+                unless on() (max(max_over_time(probe_success{job="rpc",domain="${DOMAIN}"}[5m])) < 1)
+                unless on() (max(up{job="monerod"}) < 1)
+              # Instant query: reduce "last" then takes the value of now, so the
+              # filter in the expression acts at once
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -256,6 +292,8 @@ groups:
         for: 10m
         annotations:
           summary: "monero-exporter gets no data from monerod"
+          affected: "Monitoring only. Node Falling Behind, Node Height Stale and the dashboards are blind."
+          first_step: "Run docker compose ps monerod monerod-rpc-proxy monero-exporter."
           description: "No monerod metrics for 10 minutes, so Node Falling Behind, Node Height Stale and the dashboards are blind. Check that monerod runs: docker compose ps monerod. A known cause is monerod refusing new connections from the monerod-rpc-proxy IP on 18081. Fix: docker compose restart monerod."
         labels:
           severity: critical
@@ -263,6 +301,7 @@ groups:
       - uid: alert-height-stale
         title: Node Height Stale
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -294,6 +333,8 @@ groups:
         for: 10m
         annotations:
           summary: "monerod height has not moved for 40 minutes"
+          affected: "Clearnet RPC users and onion users. Wallets get old data."
+          first_step: "Run docker logs --tail 50 monerod and check the P2P peer count."
           description: "A block comes about every 2 minutes. The node may be stuck or cut off from peers. Check docker logs --tail 50 monerod and the P2P peer count."
         labels:
           severity: critical
@@ -301,6 +342,7 @@ groups:
       - uid: alert-not-synced
         title: Node Not Synchronized
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -331,6 +373,8 @@ groups:
         for: 30m
         annotations:
           summary: "monerod reports it is not synchronized"
+          affected: "Clearnet RPC users and onion users. Wallets get old data."
+          first_step: "Compare the height with the other box. After a restart this clears in minutes."
           description: "Wallets get old data while the node syncs. After a restart this clears in minutes. If it lasts, compare the height with the other node and check peers and disk."
         labels:
           severity: critical
@@ -338,6 +382,7 @@ groups:
       - uid: alert-peers-low
         title: P2P Peers Low
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -368,6 +413,8 @@ groups:
         for: 15m
         annotations:
           summary: 'monerod has {{ printf "%.0f" .Values.B.Value }} P2P peers'
+          affected: "Nobody yet. With few peers the node can fall behind."
+          first_step: "Check that port 18080 is open, then run docker logs --tail 50 monerod."
           description: "The node normally keeps 32 outgoing peers. Check the network and port 18080, then docker logs --tail 50 monerod."
         labels:
           severity: warning
@@ -375,6 +422,7 @@ groups:
       - uid: alert-disk-warning
         title: Disk Usage Warning
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -404,6 +452,8 @@ groups:
         for: 30m
         annotations:
           summary: "Disk usage above 80%"
+          affected: "Nobody yet"
+          first_step: "Run docker system df and du -sh /var/lib/docker/volumes/*."
           description: "Disk Usage Critical fires at 85%. Find the space with docker system df and du -sh /var/lib/docker/volumes/*. Remove dangling images with docker image prune."
         labels:
           severity: warning
@@ -411,6 +461,7 @@ groups:
       - uid: alert-scrape-down
         title: Scrape Target Down
         condition: C
+        execErrState: KeepLast
         data:
           - refId: A
             relativeTimeRange:
@@ -440,6 +491,146 @@ groups:
         for: 5m
         annotations:
           summary: "Prometheus cannot scrape {{ .Labels.job }}"
+          affected: "Monitoring only. While blackbox is down, the onion, RPC, cert and Grafana probes are blind."
+          first_step: "Run docker compose ps blackbox tor-client prometheus."
           description: "While blackbox is down, the onion, RPC, cert and Grafana probes are blind. Check docker compose ps blackbox tor-client prometheus."
+        labels:
+          severity: warning
+
+      - uid: alert-disk-forecast
+        title: Disk Fills Within 14 Days
+        condition: C
+        execErrState: KeepLast
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Free bytes in 14 days at the trend of the last 6 hours, for each
+              # disk filesystem. On the boxes that is "/", which holds the chain
+              # and all Docker data. A new data disk joins without a change here.
+              expr: predict_linear(node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}[6h], 14 * 24 * 3600)
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0]
+              refId: C
+        for: 1h
+        annotations:
+          summary: "{{ .Labels.mountpoint }} fills within 14 days at the trend of the last 6 hours"
+          affected: "Nobody yet. When the disk is full: clearnet RPC users and onion users."
+          first_step: "Run docker system df and du -sh /var/lib/docker/volumes/* to find what grows."
+          description: "A log that grows fast or a chain resync can cause this. The chain alone grows about 51 MB per day. monerod stops when the disk is full."
+        labels:
+          severity: warning
+
+      - uid: alert-disk-almost-full
+        title: Disk Almost Full
+        condition: C
+        execErrState: KeepLast
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"} / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"}
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.1]
+              refId: C
+        for: 5m
+        annotations:
+          summary: '{{ .Labels.mountpoint }} has {{ humanizePercentage .Values.B.Value }} free'
+          affected: "All users of this box soon. monerod stops when the disk is full."
+          first_step: "Free space now: docker image prune -f removes the dangling images. Then find the rest with du -sh /var/lib/docker/volumes/*."
+          description: "Disk Usage Critical fires at 85% used. This is the last alert before the disk is full."
+        labels:
+          severity: critical
+
+  # Prometheus Unreachable is the one rule that alerts when the queries fail.
+  # Each other rule keeps its last state while its query fails (execErrState
+  # KeepLast), so a Prometheus restart sends no false CLEARED.
+  # vector(1) returns data whenever Prometheus answers, and the condition
+  # never holds. So the rule fires only when its query fails (execErrState
+  # Alerting) or returns no data (noDataState Alerting) for 3 minutes. Like
+  # the other rules about this box, it has no box label, so its alert comes
+  # in the message group of this box (policies.yml).
+  - orgId: 1
+    name: prometheus-alerts
+    folder: alerts
+    interval: 1m
+    rules:
+      - uid: alert-prometheus-unreachable
+        title: Prometheus Unreachable
+        condition: C
+        execErrState: Alerting
+        noDataState: Alerting
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: vector(1)
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0]
+              refId: C
+        for: 3m
+        annotations:
+          summary: "Grafana on this box cannot query Prometheus. The other alerts on this box keep their last state until Prometheus recovers."
+          affected: "Monitoring only. Until Prometheus recovers, no alert of this box clears, and a new problem gives no alert."
+          first_step: "Run docker compose ps prometheus and docker logs --tail 50 prometheus."
+          description: "The query vector(1) fails or returns no data. Each other rule keeps its last state (execErrState KeepLast): a firing alert stays firing, and a new problem gives no alert. When Prometheus recovers, the rules evaluate again and their alerts start or clear as usual."
         labels:
           severity: warning

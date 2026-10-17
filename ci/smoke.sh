@@ -57,10 +57,12 @@ ok "pulled $(docker compose config --images | sort -u | wc -l) images"
 step "fill the templates, as a deploy does"
 REPO_DIR=$repo bash scripts/deploy.sh render --domain "$domain"
 # shellcheck disable=SC2016 # the literal template text
-if grep -qF '${DOMAIN}' nginx.conf; then
-    bad "nginx.conf still has \${DOMAIN}"
+if grep -qF '${DOMAIN}' nginx.conf monitoring/grafana/provisioning/alerting/*.yml; then
+    bad "nginx.conf or an alert rule file still has \${DOMAIN}"
 fi
-ok "nginx.conf names $domain"
+grep -qF "domain=\"$domain\"" monitoring/grafana/provisioning/alerting/probe-rules.yml ||
+    bad "the probe rules do not name $domain"
+ok "nginx.conf and the alert rules name $domain"
 
 step "check the configs with the pinned images"
 check() {
@@ -130,6 +132,36 @@ for ((i = 0; i < 24; i++)); do
 done
 ((rules == want_rules)) || bad "Grafana has $rules alert rules, the files define $want_rules"
 ok "$rules alert rules"
+api v1/provisioning/alert-rules | python3 -c '
+import json, sys
+exprs = [q["model"].get("expr", "") for r in json.load(sys.stdin) for q in r["data"]]
+sys.exit(0 if any("domain=\"%s\"" % sys.argv[1] in e for e in exprs) else 1)' "$domain" ||
+    bad "the loaded alert rules do not select the probes of $domain"
+ok "the loaded alert rules select the probes of $domain"
+# A rule whose query fails must keep its last state (execErrState KeepLast),
+# so a Prometheus restart sends no false CLEARED. Only
+# Prometheus Unreachable alerts when its query fails or has no data, after 3
+# minutes or more.
+errstate=$(api v1/provisioning/alert-rules | python3 -c '
+import json, re, sys
+def seconds(d):
+    return sum(int(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"([0-9]+)([hms])", d or ""))
+rules = json.load(sys.stdin)
+out = [] if any(r["title"] == "Prometheus Unreachable" for r in rules) else ["Prometheus Unreachable (missing)"]
+for r in rules:
+    if r["title"] == "Prometheus Unreachable":
+        if (r.get("execErrState"), r.get("noDataState")) != ("Alerting", "Alerting") or seconds(r.get("for")) < 180:
+            out.append(r["title"])
+    elif r.get("execErrState") != "KeepLast":
+        out.append(r["title"])
+print(", ".join(out))')
+[[ -z $errstate ]] || bad "these alert rules have the wrong error or no data state: $errstate"
+ok "each alert rule keeps its last state when its query fails, and Prometheus Unreachable alerts"
+api v1/provisioning/templates | python3 -c '
+import json, sys
+sys.exit(0 if any(t.get("name") == "monero" for t in json.load(sys.stdin)) else 1)' ||
+    bad "Grafana has no notification template monero"
+ok "notification template monero"
 ((dashboards == want_dashboards)) || bad "Grafana has $dashboards dashboards, the files define $want_dashboards"
 ok "$dashboards dashboards"
 health=$(api "datasources/uid/$datasource/health") || health=""
@@ -145,6 +177,20 @@ import json, sys
 sys.exit(0 if json.load(sys.stdin).get("receiver") == sys.argv[1] else 1)' "$receiver" ||
     bad "the notification policy does not send to $receiver"
 ok "alerts go to contact point $receiver"
+# A rule with no data alerts at once as DatasourceNoData (noDataState NoData
+# skips the pending period), and Grafana ends the alert only 4 minutes after
+# the last evaluation with no data. So the DatasourceNoData route of
+# policies.yml must wait 7 minutes or more: then a gap in the data of up to 3
+# minutes sends no message.
+api v1/provisioning/policies | python3 -c '
+import json, re, sys
+def seconds(d):
+    return sum(int(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"([0-9]+)([hms])", d or ""))
+routes = json.load(sys.stdin).get("routes") or []
+sys.exit(0 if any("DatasourceNoData" in json.dumps(r.get("object_matchers")) and seconds(r.get("group_wait")) >= 420
+                  for r in routes) else 1)' ||
+    bad "the notification policy has no DatasourceNoData route that waits 7 minutes or more"
+ok "DatasourceNoData alerts wait 7 minutes or more before a message"
 # The repo has no provisioning/plugins dir. Grafana logs that as an error.
 errors=$(docker compose logs --no-color grafana 2>&1 | grep -E 'level=(error|crit)' | grep -iE 'provision' |
     grep -vE 'Failed to read plugin provisioning files from directory.*no such file or directory' || true)

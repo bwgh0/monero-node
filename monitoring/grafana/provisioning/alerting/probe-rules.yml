@@ -1,9 +1,20 @@
 apiVersion: 1
 
-# Probe alerts. Both boxes probe both nodes (see prometheus.yml), so an
-# outage alerts from both boxes. The Source link in each message shows
-# which box sent it. If only one box alerts about the other, check the
-# network path between them first.
+# Probe alerts. Each box probes both boxes (see prometheus.yml), but each box
+# alerts only about its own services, so one incident sends one message.
+# "deploy.sh render" writes the DOMAIN of this box into the placeholders:
+#   domain="<this box>"   the rules about this box
+#   domain!="<this box>"  the rules about the other box: Grafana Unreachable
+#                         (the dead-man check) and Peer RPC Refused. They set
+#                         the label box: peer (see policies.yml).
+# When both boxes are down, the GitHub watchdog alerts
+# (.github/workflows/watchdog.yml). docs/monitoring.md has the routing table.
+#
+# Some rules stay quiet while a rule with the same cause fires:
+#   Onion Down, Monero Exporter Blind and Container Unhealthy (monerod) while
+#   all RPC probes of this box fail (RPC Endpoint Down covers a monerod outage)
+#   Monero Exporter Blind while monero-exporter is down (Node Down covers it)
+#   Onion TLS Down while the plain onion probe fails (Onion Down covers it)
 
 groups:
   - orgId: 1
@@ -14,6 +25,7 @@ groups:
       - uid: alert-onion-down
         title: Onion Down
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -22,9 +34,16 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              # 0 when no probe passed in the last 15 minutes. Tor probes fail now and
-              # then, so a single failure never alerts.
-              expr: max_over_time(probe_success{job="onion"}[15m])
+              # 0 when no probe of the onion of this box passed in the last
+              # 15 minutes. Tor probes fail now and then, so a single failure
+              # never alerts.
+              expr: >-
+                max_over_time(probe_success{job="onion",domain="${DOMAIN}"}[15m])
+                unless on() (max(max_over_time(probe_success{job="rpc",domain="${DOMAIN}"}[5m])) < 1)
+              # Instant query: reduce "last" then takes the value of now, so the
+              # filter in the expression acts at once
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -45,14 +64,17 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "{{ .Labels.node }} onion fails over plain HTTP"
-          description: "No probe got a status OK reply from {{ .Labels.instance }} in 25 minutes. Apps that use this onion cannot sync. On the {{ .Labels.node }} box check docker compose ps tor onion-proxy monerod and docker logs --tail 50 tor. A restart keeps the onion address: docker compose restart tor. If both onions fail from one box only, the tor-client on that box is stuck: docker compose restart tor-client."
+          summary: "The onion of this box fails over plain HTTP"
+          affected: "Onion users. The apps that use this onion cannot sync."
+          first_step: "On the {{ toUpper .Labels.node }} box run docker compose ps tor onion-proxy monerod and docker logs --tail 50 tor."
+          description: "No probe from this box got a status OK reply from its onion in 25 minutes. A restart keeps the onion address: docker compose restart tor. If the onion of the other box also fails from this box, the tor-client here is stuck: docker compose restart tor-client."
         labels:
           severity: critical
 
       - uid: alert-onion-tls-down
         title: Onion TLS Down
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -61,7 +83,13 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              expr: max_over_time(probe_success{job="onion-tls"}[15m])
+              expr: >-
+                max_over_time(probe_success{job="onion-tls",domain="${DOMAIN}"}[15m])
+                unless on(node) (max by (node) (max_over_time(probe_success{job="onion",domain="${DOMAIN}"}[15m])) < 1)
+              # Instant query: reduce "last" then takes the value of now, so the
+              # filter in the expression acts at once
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -82,14 +110,17 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "{{ .Labels.node }} onion fails over TLS"
-          description: "No probe got a status OK reply from {{ .Labels.instance }} in 25 minutes. Clients that use https with this onion fail. If plain HTTP works, check docker logs onion-proxy on the {{ .Labels.node }} box."
+          summary: "The onion of this box fails over TLS, and plain HTTP works"
+          affected: "Onion users that connect with https"
+          first_step: "On the {{ toUpper .Labels.node }} box run docker logs --tail 50 onion-proxy."
+          description: "No TLS probe from this box got a status OK reply from its onion in 25 minutes. The onion-proxy passes TLS through to monerod, so also check the monerod cert."
         labels:
           severity: warning
 
       - uid: alert-rpc-down
         title: RPC Endpoint Down
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -98,7 +129,7 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              expr: max_over_time(probe_success{job="rpc"}[5m])
+              expr: max_over_time(probe_success{job="rpc",domain="${DOMAIN}"}[5m])
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -117,16 +148,85 @@ groups:
                     type: lt
                     params: [1]
               refId: C
-        for: 5m
+          # The onion of this box in the last 10 minutes, for the message only
+          - refId: D
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max by (node) (max_over_time(probe_success{job="onion",domain="${DOMAIN}"}[10m]))
+              refId: D
+          - refId: E
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: D
+              reducer: last
+              refId: E
+        # The 5m window of A already waits 5 minutes
+        for: 1m
         annotations:
           summary: "{{ .Labels.instance }} fails"
-          description: "No status OK reply for 10 minutes. Wallets cannot use this node on clearnet. An expired or wrong cert also fails this probe. On the {{ .Labels.node }} box check docker compose ps monerod and docker logs --tail 50 monerod."
+          affected: >-
+            Clearnet RPC users{{ if .Values.E.Labels }}{{ if lt .Values.E.Value 1.0 }} and onion users.
+            The onion fails too, so monerod itself is the likely cause{{ end }}{{ end }}.
+          first_step: "On the {{ toUpper .Labels.node }} box run docker compose ps monerod and docker logs --tail 50 monerod."
+          description: "No status OK reply for 6 minutes. An expired or wrong cert also fails this probe. While this alert fires, Onion Down, Monero Exporter Blind and Container Unhealthy stay quiet for monerod. The other box sends Peer RPC Refused when only its probe fails."
         labels:
           severity: critical
+
+      - uid: alert-rpc-slow
+        title: RPC Slow
+        condition: C
+        execErrState: KeepLast
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Seconds per probe. Probes that fail do not count here.
+              expr: >-
+                avg_over_time(probe_duration_seconds{job="rpc",domain="${DOMAIN}"}[5m])
+                and on(instance) (max_over_time(probe_success{job="rpc",domain="${DOMAIN}"}[5m]) == 1)
+              # Instant query: reduce "last" then takes the value of now, so the
+              # filter in the expression acts at once
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [2]
+              refId: C
+        for: 10m
+        annotations:
+          summary: '{{ .Labels.instance }} takes {{ printf "%.1f" .Values.B.Value }} s per probe'
+          affected: "Clearnet RPC users. Wallets sync slowly."
+          first_step: "On the {{ toUpper .Labels.node }} box check RPC Busy, monerod CPU and disk IO: docker stats --no-stream monerod."
+          description: "The probe takes more than 2 s on average for 10 minutes. The normal p95 is below 0.05 s. When only one port is slow, check the network path. A restore wave on the RPC threads also causes this. See RPC Busy in docs/capacity.md."
+        labels:
+          severity: warning
 
       - uid: alert-cert-expiring
         title: TLS Cert Expiring
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -136,7 +236,7 @@ groups:
             datasourceUid: PBFA97CFB590B2093
             model:
               # Days left on the cert that each port serves
-              expr: (probe_ssl_earliest_cert_expiry{job="rpc"} - time()) / 86400
+              expr: (probe_ssl_earliest_cert_expiry{job="rpc",domain="${DOMAIN}"} - time()) / 86400
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -158,13 +258,16 @@ groups:
         for: 1h
         annotations:
           summary: '{{ .Labels.instance }} serves a cert that expires in {{ printf "%.0f" .Values.B.Value }} days'
-          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod to load the new cert. On the {{ .Labels.node }} box check docker logs certbot and run that cron script by hand."
+          affected: "Nobody yet. When the cert expires: clearnet RPC users and onion users that connect with https."
+          first_step: "On the {{ toUpper .Labels.node }} box run docker logs --tail 50 certbot, then bash /etc/cron.daily/monerod-cert-reload."
+          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod to load the new cert."
         labels:
           severity: warning
 
       - uid: alert-grafana-down
         title: Grafana Unreachable
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -173,7 +276,98 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              expr: max_over_time(probe_success{job="grafana"}[10m])
+              # The dead-man check between the boxes: 0 when the Grafana of the
+              # other box did not answer this box in the last 10 minutes
+              expr: max by (node) (max_over_time(probe_success{job="grafana",domain!="${DOMAIN}"}[10m]))
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+          # The RPC and the onion of the other box, for the message only
+          - refId: D
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max by (node) (max_over_time(probe_success{job="rpc",domain!="${DOMAIN}"}[10m]))
+              refId: D
+          - refId: E
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: D
+              reducer: last
+              refId: E
+          - refId: F
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max by (node) (max_over_time(probe_success{job="onion",domain!="${DOMAIN}"}[15m]))
+              refId: F
+          - refId: G
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: F
+              reducer: last
+              refId: G
+        for: 5m
+        annotations:
+          summary: "Grafana on the {{ toUpper .Labels.node }} box does not answer, so that box cannot send alerts"
+          affected: >-
+            {{ if not (and .Values.E.Labels .Values.G.Labels) }}Unknown. Check the RPC and the onion of that box by hand.
+            {{- else if and (lt .Values.E.Value 1.0) (lt .Values.G.Value 1.0) }}Clearnet RPC users and onion users. The RPC and the onion of that box fail from here too, so the box itself is probably down.
+            {{- else if lt .Values.E.Value 1.0 }}Clearnet RPC users. The RPC of that box fails from here, and its onion answers.
+            {{- else if lt .Values.G.Value 1.0 }}Onion users. The onion of that box fails from here, and its RPC answers.
+            {{- else }}Monitoring only. The RPC and the onion of that box answer.{{ end }}
+          first_step: "Run ssh root@{{ .Labels.node }}.node.monero.one docker compose -f /opt/monero-node/docker-compose.yml ps. If ssh fails, the box itself is down: check the Hetzner console."
+          description: "Nobody gets the alerts of that box while this fires. This box probes http://{{ .Labels.node }}.node.monero.one/grafana/api/health, so a stopped nginx on that box also fails it. When both boxes are down, the GitHub watchdog alerts."
+        labels:
+          severity: critical
+          # About the other box: its alerts come in a group of their own (policies.yml)
+          box: peer
+
+      - uid: alert-peer-rpc-refused
+        title: Peer RPC Refused
+        condition: C
+        execErrState: KeepLast
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # The canary for per-IP refusals (docs/capacity.md): 0 when the RPC
+              # of the other box failed every probe from this box for 15 minutes,
+              # while the Grafana and the onion of that box answer. When they
+              # fail too, Grafana Unreachable or the alerts of that box cover it.
+              expr: >-
+                max_over_time(probe_success{job="rpc",domain!="${DOMAIN}"}[15m])
+                unless on(node) (max by (node) (max_over_time(probe_success{job="grafana",domain!="${DOMAIN}"}[5m])) < 1)
+                unless on(node) (max by (node) (max_over_time(probe_success{job="onion",domain!="${DOMAIN}"}[15m])) < 1)
+              # Instant query: reduce "last" then takes the value of now, so the
+              # filter in the expression acts at once
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -194,7 +388,10 @@ groups:
               refId: C
         for: 5m
         annotations:
-          summary: "Grafana on {{ .Labels.node }} does not answer"
-          description: "That box sends no alerts while its Grafana is down. Try ssh root@{{ .Labels.node }}.node.monero.one and docker compose ps. If ssh fails, the box itself is down."
+          summary: "{{ .Labels.instance }} refuses the probes from the other box"
+          affected: "Clearnet RPC users that share an IP with other users (NAT, VPN), and maybe more"
+          first_step: "If the {{ toUpper .Labels.node }} box sent no RPC Endpoint Down, monerod there refuses the IP of this box. Restart monerod on the {{ toUpper .Labels.node }} box at a quiet hour: docker compose restart monerod."
+          description: "The probe from the {{ toUpper .Labels.node }} box itself passes when no RPC Endpoint Down arrived from it. Then the per-IP cap or the count leak of monerod holds the IP of this box. See Public IP At RPC Cap in docs/capacity.md. A wrong cert fails both probes, and that box also sends RPC Endpoint Down."
         labels:
-          severity: critical
+          severity: warning
+          box: peer

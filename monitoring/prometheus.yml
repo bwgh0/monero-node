@@ -20,7 +20,9 @@ scrape_configs:
       - targets: ["localhost:9091"]
 
   # Probes run in blackbox (see blackbox.yml). Both boxes probe both nodes,
-  # so each box also watches its peer. The "node" label names the target.
+  # so each box also watches its peer. The "node" label names the target box
+  # and "domain" its host name. The alert rules compare "domain" with the
+  # DOMAIN of this box (see the comment in alerting/probe-rules.yml).
 
   # Restricted RPC over clearnet TLS on 443 and 18089. Also gives the
   # expiry of the cert each port serves.
@@ -36,11 +38,13 @@ scrape_configs:
           - https://us.node.monero.one:18089/get_height
         labels:
           node: us
+          domain: us.node.monero.one
       - targets:
           - https://eu.node.monero.one/get_height
           - https://eu.node.monero.one:18089/get_height
         labels:
           node: eu
+          domain: eu.node.monero.one
     relabel_configs: &probe_relabel
       - source_labels: [__address__]
         target_label: __param_target
@@ -60,9 +64,11 @@ scrape_configs:
       - targets: ["http://5tvl5acn3sm7id4gzc4mj6n7lrwlyrhssr2r57zkxk6eugxwix4ze4qd.onion:18089/get_height"]
         labels:
           node: us
+          domain: us.node.monero.one
       - targets: ["http://zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion:18089/get_height"]
         labels:
           node: eu
+          domain: eu.node.monero.one
     relabel_configs: *probe_relabel
 
   # Both onions over TLS through Tor
@@ -76,9 +82,11 @@ scrape_configs:
       - targets: ["https://5tvl5acn3sm7id4gzc4mj6n7lrwlyrhssr2r57zkxk6eugxwix4ze4qd.onion:18089/get_height"]
         labels:
           node: us
+          domain: us.node.monero.one
       - targets: ["https://zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion:18089/get_height"]
         labels:
           node: eu
+          domain: eu.node.monero.one
     relabel_configs: *probe_relabel
 
   # Grafana on both boxes. A box whose Grafana is down sends no alerts,
@@ -93,7 +101,9 @@ scrape_configs:
       - targets: ["http://us.node.monero.one/grafana/api/health"]
         labels:
           node: us
+          domain: us.node.monero.one
       - targets: ["http://eu.node.monero.one/grafana/api/health"]
         labels:
           node: eu
+          domain: eu.node.monero.one
     relabel_configs: *probe_relabel

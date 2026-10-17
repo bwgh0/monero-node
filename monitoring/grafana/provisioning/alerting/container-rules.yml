@@ -12,6 +12,7 @@ groups:
       - uid: alert-container-down
         title: Container Down
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -42,6 +43,12 @@ groups:
         for: 5m
         annotations:
           summary: "Container {{ .Labels.name }} is not running"
+          affected: >-
+            {{ if eq .Labels.name "monerod" }}Clearnet RPC users and onion users
+            {{- else if or (eq .Labels.name "tor") (eq .Labels.name "onion-proxy") }}Onion users
+            {{- else if eq .Labels.name "certbot" }}Nobody yet. Cert renewals stop.
+            {{- else }}Monitoring only{{ end }}
+          first_step: "Run docker compose up -d {{ .Labels.name }}, then docker logs --tail 50 {{ .Labels.name }}."
           description: "Check docker compose ps -a and docker logs --tail 50 {{ .Labels.name }}. Start it with docker compose up -d {{ .Labels.name }}."
         labels:
           severity: critical
@@ -49,6 +56,7 @@ groups:
       - uid: alert-container-crashed
         title: Container Crashed
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -81,6 +89,12 @@ groups:
         for: 0s
         annotations:
           summary: "Container {{ .Labels.name }} crashed and Docker restarted it"
+          affected: >-
+            {{ if eq .Labels.name "monerod" }}Clearnet RPC users and onion users
+            {{- else if or (eq .Labels.name "tor") (eq .Labels.name "onion-proxy") }}Onion users
+            {{- else if eq .Labels.name "certbot" }}Nobody yet. Cert renewals stop.
+            {{- else }}Monitoring only{{ end }}
+          first_step: "Run docker logs --tail 100 {{ .Labels.name }}."
           description: "Repeat alerts mean a crash loop. Check docker logs --tail 100 {{ .Labels.name }} and docker inspect {{ .Labels.name }} (State.OOMKilled, State.ExitCode)."
         labels:
           severity: warning
@@ -88,6 +102,7 @@ groups:
       - uid: alert-container-unhealthy
         title: Container Unhealthy
         condition: C
+        execErrState: KeepLast
         noDataState: OK
         data:
           - refId: A
@@ -96,7 +111,15 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              expr: docker_container_unhealthy
+              # Only monerod has a healthcheck. Quiet for monerod while all RPC
+              # probes of this box fail: RPC Endpoint Down covers that outage.
+              expr: >-
+                docker_container_unhealthy
+                unless on(name) label_replace(max(max_over_time(probe_success{job="rpc",domain="${DOMAIN}"}[5m])) < 1, "name", "monerod", "", "")
+              # Instant query: reduce "last" then takes the value of now, so the
+              # filter in the expression acts at once
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -118,6 +141,12 @@ groups:
         for: 10m
         annotations:
           summary: "Container {{ .Labels.name }} fails its healthcheck"
+          affected: >-
+            {{ if eq .Labels.name "monerod" }}Clearnet RPC users and onion users
+            {{- else if or (eq .Labels.name "tor") (eq .Labels.name "onion-proxy") }}Onion users
+            {{- else if eq .Labels.name "certbot" }}Nobody yet. Cert renewals stop.
+            {{- else }}Monitoring only{{ end }}
+          first_step: "Run docker logs --tail 50 {{ .Labels.name }}."
           description: "The monerod healthcheck calls get_height on 18081 inside the container. Check docker logs --tail 50 {{ .Labels.name }}."
         labels:
           severity: warning
@@ -125,6 +154,7 @@ groups:
       - uid: alert-container-metrics-stale
         title: Container Metrics Stale
         condition: C
+        execErrState: KeepLast
         noDataState: Alerting
         data:
           - refId: A
@@ -133,8 +163,11 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              # No data means the file is missing, so that alerts too
-              expr: time() - docker_metrics_last_run_timestamp_seconds
+              # A missing file gives 1e9, so that alerts too. 0 while
+              # node-exporter is down: System Exporter Down covers that.
+              expr: ((time() - max(docker_metrics_last_run_timestamp_seconds)) or vector(1e9)) * on() (max(up{job="node"}) == bool 1)
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -156,6 +189,8 @@ groups:
         for: 5m
         annotations:
           summary: "Container state metrics are stale"
+          affected: "Monitoring only. The container alerts are blind."
+          first_step: "Run bash /opt/monero-node/scripts/docker-metrics.sh by hand to see the error."
           description: "The cron job /etc/cron.d/monero-node-docker-metrics has not updated /var/lib/node-exporter/textfile/docker.prom, so the container alerts are blind. Run bash /opt/monero-node/scripts/docker-metrics.sh by hand to see the error."
         labels:
           severity: warning

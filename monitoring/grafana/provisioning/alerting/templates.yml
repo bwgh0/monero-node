@@ -1,0 +1,130 @@
+apiVersion: 1
+
+# The Telegram message (contactpoints.yml uses monero.message). One block per
+# alert in the notification group (policies.yml groups the alerts by box):
+#   ALERT or WARNING <box>: <rule title>, then what broke, who is affected,
+#   the first step and the details.
+#   CLEARED <box>: <rule title> when the alert resolves
+# Telegram takes at most 4096 characters. Grafana cuts a longer message, and
+# a cut inside an HTML tag fails the send. A block has up to about 750
+# characters, so monero.blocks shows the first 3 firing and the first 3
+# cleared alerts as blocks, the next 8 of each as one line, and counts the
+# rest. A message thus stays under about 3750 characters (11 or more firing
+# and 11 or more cleared alerts with the longest annotations). A firing
+# Prometheus Unreachable line also shows its summary, so the message tells
+# that the other alerts keep their last state.
+# A rule whose query returns no data (DatasourceNoData, see policies.yml)
+# shows as "<rule title> (no data)". When 3 or more rules have no data at the
+# same time, one short block lists them (at most 40). A rule whose query
+# fails keeps its last state (execErrState KeepLast, ci/smoke.sh checks it),
+# and Prometheus Unreachable alerts. The "(query error)" text is for a rule
+# with execErrState Error (DatasourceError). No rule sets it now.
+# <box> is the box that the alert is about: the "node" label of the probe
+# rules, else the box that sends it. The contact point uses parse_mode HTML,
+# so every value from a rule goes through "html".
+# Keep "$" out of this file: Grafana fills in environment variables there.
+
+templates:
+  - orgId: 1
+    name: monero
+    template: |
+      {{ define "monero.sender" }}{{ reReplaceAll "[.].*" "" (reReplaceAll "^[a-z]+://" "" .GeneratorURL) | toUpper }}{{ end }}
+
+      {{ define "monero.box" }}{{ if .Labels.node }}{{ toUpper .Labels.node }}{{ else }}{{ template "monero.sender" . }}{{ end }}{{ end }}
+
+      {{ define "monero.title" }}
+      {{- if eq .Labels.alertname "DatasourceNoData" }}{{ .Labels.rulename | html }} (no data)
+      {{- else if eq .Labels.alertname "DatasourceError" }}{{ .Labels.rulename | html }} (query error)
+      {{- else }}{{ .Labels.alertname | html }}{{ end }}
+      {{- end }}
+
+      {{ define "monero.blindwhy" }}{{ if eq .Labels.alertname "DatasourceError" }}fails{{ else }}returns no data{{ end }}{{ end }}
+
+      {{ define "monero.alert" }}
+      {{- if eq .Status "firing" -}}
+      <b>{{ if eq .Labels.severity "critical" }}ALERT{{ else }}WARNING{{ end }} {{ template "monero.box" . }}: {{ template "monero.title" . }}</b>
+      {{- if eq .Labels.alertname "DatasourceNoData" "DatasourceError" }}
+      What broke: The query of this rule {{ template "monero.blindwhy" . }}, so the rule is blind.
+      Who is affected: Monitoring only
+      First step: {{ if eq .Labels.alertname "DatasourceError" }}Run docker compose ps prometheus and docker logs --tail 50 prometheus.{{ else }}Look for the metrics of the rule in Grafana Explore.{{ end }}
+      {{- else }}
+      What broke: {{ or .Annotations.summary "no summary" | html }}
+      Who is affected: {{ or .Annotations.affected "not set for this rule" | html }}
+      First step: {{ or .Annotations.first_step "see the details" | html }}
+      {{- with .Annotations.description }}
+      Details: {{ . | html }}
+      {{- end }}
+      {{- end }}
+      Since {{ .StartsAt.UTC.Format "2006-01-02 15:04" }} UTC. Sent by the {{ template "monero.sender" . }} box.
+      {{- else -}}
+      <b>CLEARED {{ template "monero.box" . }}: {{ template "monero.title" . }}</b>
+      {{- if eq .Labels.alertname "DatasourceNoData" "DatasourceError" }}
+      It was: The query of this rule {{ template "monero.blindwhy" . }}.
+      {{- else }}
+      It was: {{ or .Annotations.summary "no summary" | html }}
+      {{- end }}
+      From {{ .StartsAt.UTC.Format "2006-01-02 15:04" }} to {{ .EndsAt.UTC.Format "15:04" }} UTC. Sent by the {{ template "monero.sender" . }} box.
+      {{- end }}
+      {{ end }}
+
+      {{ define "monero.rulenames" }}
+      {{- if gt (len .) 40 }}
+      {{- range slice . 0 40 }}
+      {{ .Labels.rulename | html }}
+      {{- end }}
+      And {{ len (slice . 40) }} more rules.
+      {{- else }}
+      {{- range . }}
+      {{ .Labels.rulename | html }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+
+      {{ define "monero.blind" }}
+      {{- with .Alerts.Firing -}}
+      <b>WARNING {{ template "monero.sender" (index . 0) }}: rules are blind</b>
+      What broke: The queries of {{ len . }} rules {{ if eq (index . 0).Labels.alertname "DatasourceError" }}fail{{ else }}return no data{{ end }}:
+      {{- template "monero.rulenames" . }}
+      {{- with index . 0 }}
+      Who is affected: Monitoring only
+      First step: {{ if eq .Labels.alertname "DatasourceError" }}Run docker compose ps prometheus and docker logs --tail 50 prometheus.{{ else }}Look for the metrics of these rules in Grafana Explore.{{ end }}
+      Since {{ .StartsAt.UTC.Format "2006-01-02 15:04" }} UTC. Sent by the {{ template "monero.sender" . }} box.
+      {{ end }}
+      {{ end }}
+      {{- with .Alerts.Resolved -}}
+      <b>CLEARED {{ template "monero.sender" (index . 0) }}: rules are blind</b>
+      These {{ len . }} rules work again:
+      {{- template "monero.rulenames" . }}
+      {{- with index . 0 }}
+      Sent by the {{ template "monero.sender" . }} box.
+      {{- end }}
+      {{ end }}
+      {{- end }}
+
+      {{ define "monero.line" }}
+      {{- if ne .Status "firing" }}CLEARED{{ else if eq .Labels.severity "critical" }}ALERT{{ else }}WARNING{{ end }} {{ template "monero.box" . }}: {{ template "monero.title" . }}
+      {{- if and (eq .Status "firing") (eq .Labels.alertname "Prometheus Unreachable") }}. {{ .Annotations.summary | html }}{{ end }}
+      {{ end }}
+
+      {{ define "monero.blocks" }}
+      {{- if le (len .) 3 }}
+      {{- range . }}{{ template "monero.alert" . }}
+      {{ end }}
+      {{- else }}
+      {{- range slice . 0 3 }}{{ template "monero.alert" . }}
+      {{ end }}
+      {{- if le (len .) 11 }}{{ range slice . 3 }}{{ template "monero.line" . }}{{ end }}
+      {{- else }}{{ range slice . 3 11 }}{{ template "monero.line" . }}{{ end }}And {{ len (slice . 11) }} more.
+      {{ end }}
+      {{- if eq (index . 0).Status "firing" }}Grafana lists all alerts: {{ reReplaceAll "/alerting/.*" "/alerting/list" (index . 0).GeneratorURL | html }}
+      {{ end }}
+      {{ end }}
+      {{- end }}
+
+      {{ define "monero.message" }}
+      {{- if and (eq .GroupLabels.alertname "DatasourceNoData" "DatasourceError") (gt (len .Alerts) 2) }}{{ template "monero.blind" . }}
+      {{- else }}
+      {{- with .Alerts.Firing }}{{ template "monero.blocks" . }}{{ end }}
+      {{- with .Alerts.Resolved }}{{ template "monero.blocks" . }}{{ end }}
+      {{- end }}
+      {{- end }}

@@ -1,9 +1,42 @@
 apiVersion: 1
 
+# One Telegram message per incident on a box (templates.yml writes one block
+# per alert):
+# - group_by box: the alerts about this box come in one group. The two rules
+#   about the other box (Grafana Unreachable, Peer RPC Refused) set the label
+#   box: peer, so their alerts come in a group of their own.
+# - group_wait 90s: the rules evaluate every minute, but Grafana spreads the
+#   rule groups over the minute, and the scrape intervals and the docker
+#   metrics cron differ. So the alerts of one incident can start up to about
+#   a minute apart. 90 seconds puts them in the first message. An alert that
+#   starts or clears later comes in an update, at most every 5 minutes.
+#   (docker-compose.yml sets the resolved alert retention of Grafana to 30s,
+#   so an update shows each CLEARED alert once.)
+# - A rule whose query fails keeps its last state (execErrState KeepLast): a
+#   firing alert stays firing, no alert clears, and a new problem gives no
+#   alert. A pending alert still fires when its "for" time ends. So a
+#   Prometheus restart, or an outage of up to 5 minutes, sends no false
+#   CLEARED (docs/monitoring.md lists the limits).
+#   Prometheus Unreachable (rules.yml) alerts after 3 minutes, in the
+#   group of this box. When this group sent a message before, the alert comes
+#   in the next update, at most 5 minutes later.
+# - Some rules in rules.yml keep the default noDataState NoData. When the
+#   query of such a rule returns no data, Grafana alerts at once as
+#   DatasourceNoData, with no pending period. Grafana keeps this alert active
+#   until 4 minutes after the last evaluation with no data, also when the
+#   data comes back before that time. So DatasourceNoData waits 8 minutes in
+#   its own route: a gap in the data of less than about 4 minutes sends
+#   nothing. templates.yml puts 3 or more of these alerts in one "rules are
+#   blind" message.
 policies:
   - orgId: 1
     receiver: telegram
-    group_by: ['alertname']
-    group_wait: 30s
+    group_by: ['box']
+    group_wait: 90s
     group_interval: 5m
     repeat_interval: 4h
+    routes:
+      - object_matchers:
+          - ['alertname', '=', 'DatasourceNoData']
+        group_by: ['alertname']
+        group_wait: 8m
