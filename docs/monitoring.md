@@ -274,8 +274,9 @@ runs on each PR, and a merge to main deploys to both boxes.
   another service. So merge a monerod PR alone, and wait for its deploy to
   finish before you merge the next PR.
 - The monerod bump to v0.18.5.x is a separate task. The owner decides it.
-- Dependabot updates an image line that has a version tag. node-exporter and
-  monero-exporter have a digest and no tag, so check them by hand.
+- Dependabot follows the version tag of an image. An image line with only a
+  digest (monero-exporter) gets a PR to the digest of the latest tag, with no
+  version number. Check such a PR by hand.
 
 ## Prometheus retention
 
