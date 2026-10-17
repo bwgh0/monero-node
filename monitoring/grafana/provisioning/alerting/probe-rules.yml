@@ -70,7 +70,7 @@ groups:
         annotations:
           summary: "The onion of this box fails over plain HTTP"
           affected: "Onion users. The apps that use this onion cannot sync."
-          first_step: "On the {{ toUpper .Labels.node }} box run docker compose ps tor onion-proxy monerod and docker logs --tail 50 tor."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker compose ps tor onion-proxy monerod and docker logs --tail 50 tor."
           description: "No probe from this box got a status OK reply from its onion in 25 minutes. A restart keeps the onion address: docker compose restart tor. If the onion of the other box also fails from this box, the tor-client here is stuck: docker compose restart tor-client."
         labels:
           severity: critical
@@ -116,7 +116,7 @@ groups:
         annotations:
           summary: "The onion of this box fails over TLS, and plain HTTP works"
           affected: "Onion users that connect with https"
-          first_step: "On the {{ toUpper .Labels.node }} box run docker logs --tail 50 onion-proxy."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker logs --tail 50 onion-proxy."
           description: "No TLS probe from this box got a status OK reply from its onion in 25 minutes. The onion-proxy passes TLS through to monerod, so also check the monerod cert."
         labels:
           severity: warning
@@ -175,7 +175,7 @@ groups:
           affected: >-
             Clearnet RPC users{{ if .Values.E.Labels }}{{ if lt .Values.E.Value 1.0 }} and onion users.
             The onion fails too, so monerod itself is the likely cause{{ end }}{{ end }}.
-          first_step: "On the {{ toUpper .Labels.node }} box run docker compose ps monerod and docker logs --tail 50 monerod."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker compose ps monerod and docker logs --tail 50 monerod."
           description: "No status OK reply for 6 minutes. An expired or wrong cert also fails this probe. While this alert fires, Onion Down, Monero Exporter Blind and Container Unhealthy stay quiet for monerod. The other box sends Peer RPC Refused when only its probe fails."
         labels:
           severity: critical
@@ -220,9 +220,9 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: '{{ .Labels.instance }} takes {{ printf "%.1f" .Values.B.Value }} s per probe'
+          summary: '{{ .Labels.instance }} takes {{ with .Values.B }}{{ printf "%.1f" .Value }} s{{ else }}an unknown time{{ end }} per probe'
           affected: "Clearnet RPC users. Wallets sync slowly."
-          first_step: "On the {{ toUpper .Labels.node }} box check RPC Busy, monerod CPU and disk IO: docker stats --no-stream monerod."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box check RPC Busy, monerod CPU and disk IO: docker stats --no-stream monerod."
           description: "The probe takes more than 2 s on average for 10 minutes. The normal p95 is below 0.05 s. When only one port is slow, check the network path. A restore wave on the RPC threads also causes this. See RPC Busy in docs/capacity.md."
         labels:
           severity: warning
@@ -261,9 +261,9 @@ groups:
               refId: C
         for: 1h
         annotations:
-          summary: '{{ .Labels.instance }} serves a cert that expires in {{ printf "%.0f" .Values.B.Value }} days'
+          summary: '{{ .Labels.instance }} serves a cert that expires in {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} days'
           affected: "Nobody yet. When the cert expires: clearnet RPC users and onion users that connect with https."
-          first_step: "On the {{ toUpper .Labels.node }} box run docker logs --tail 50 certbot, then bash /etc/cron.daily/monerod-cert-reload."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker logs --tail 50 certbot, then bash /etc/cron.daily/monerod-cert-reload."
           description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod to load the new cert."
         labels:
           severity: warning
@@ -334,7 +334,7 @@ groups:
               refId: G
         for: 5m
         annotations:
-          summary: "Grafana on the {{ toUpper .Labels.node }} box does not answer, so that box cannot send alerts"
+          summary: "Grafana on the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box does not answer, so that box cannot send alerts"
           affected: >-
             {{ if not (and .Values.E.Labels .Values.G.Labels) }}Unknown. Check the RPC and the onion of that box by hand.
             {{- else if and (lt .Values.E.Value 1.0) (lt .Values.G.Value 1.0) }}Clearnet RPC users and onion users. The RPC and the onion of that box fail from here too, so the box itself is probably down.
@@ -394,8 +394,8 @@ groups:
         annotations:
           summary: "{{ .Labels.instance }} refuses the probes from the other box"
           affected: "Clearnet RPC users that share an IP with other users (NAT, VPN), and maybe more"
-          first_step: "If the {{ toUpper .Labels.node }} box sent no RPC Endpoint Down, monerod there refuses the IP of this box. Restart monerod on the {{ toUpper .Labels.node }} box at a quiet hour: docker compose restart monerod."
-          description: "The probe from the {{ toUpper .Labels.node }} box itself passes when no RPC Endpoint Down arrived from it. Then the per-IP cap or the count leak of monerod holds the IP of this box. See Public IP At RPC Cap in docs/capacity.md. A wrong cert fails both probes, and that box also sends RPC Endpoint Down."
+          first_step: "If the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box sent no RPC Endpoint Down, monerod there refuses the IP of this box. Restart monerod on the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box at a quiet hour: docker compose restart monerod."
+          description: "The probe from the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box itself passes when no RPC Endpoint Down arrived from it. Then the per-IP cap or the count leak of monerod holds the IP of this box. See Public IP At RPC Cap in docs/capacity.md. A wrong cert fails both probes, and that box also sends RPC Endpoint Down."
         labels:
           severity: warning
           box: peer

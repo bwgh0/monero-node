@@ -54,7 +54,7 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "Public RPC holds {{ humanizePercentage .Values.B.Value }} of its socket limit"
+          summary: "Public RPC holds {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of its socket limit"
           affected: "Nobody yet. At the limit monerod refuses new wallets: clearnet RPC users and onion users."
           first_step: "Run grep -E '^capacity_rpc_(connections|limit)' /var/lib/node-exporter/textfile/capacity.prom to see the sockets by source."
           description: "Open wallets fill the socket limit of the public RPC. At the limit each new wallet is refused and stays broken until the user reopens it. Many public sockets means real growth. Many sockets from one source means one client or the onion-proxy. See RPC Connections High in docs/capacity.md."
@@ -96,7 +96,7 @@ groups:
               refId: C
         for: 5m
         annotations:
-          summary: "Public RPC holds {{ humanizePercentage .Values.B.Value }} of its socket limit"
+          summary: "Public RPC holds {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of its socket limit"
           affected: "Clearnet RPC users and onion users soon. At the limit monerod refuses every new wallet."
           first_step: "Run grep -E '^capacity_rpc_(connections|limit)' /var/lib/node-exporter/textfile/capacity.prom to see the sockets by source."
           description: "Raise the connection caps on both boxes, or move users to the other box. See RPC Connections High in docs/capacity.md."
@@ -141,7 +141,7 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "Onion wallets hold {{ humanizePercentage .Values.B.Value }} of the private-IP socket cap"
+          summary: "Onion wallets hold {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the private-IP socket cap"
           affected: "Nobody yet. At the cap monerod refuses new onion wallets."
           first_step: "Run grep -E '^capacity_(rpc_connections.*onion|rpc_limit|onion_socket_clients)' /var/lib/node-exporter/textfile/capacity.prom to compare the monerod sockets with the Tor clients."
           description: "A monerod count far above the Tor clients means pool sockets of the plain path or a client that reconnects. Keep --rpc-max-connections-per-private-ip at or below --rpc-max-connections, or monerod stops at start. See Onion RPC Connections High in docs/capacity.md."
@@ -184,7 +184,7 @@ groups:
               refId: C
         for: 5m
         annotations:
-          summary: "Onion wallets hold {{ humanizePercentage .Values.B.Value }} of the private-IP socket cap"
+          summary: "Onion wallets hold {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the private-IP socket cap"
           affected: "Onion users soon. At the cap monerod refuses every new onion wallet."
           first_step: "Run grep -E '^capacity_(rpc_connections.*onion|rpc_limit|onion_socket_clients)' /var/lib/node-exporter/textfile/capacity.prom to compare the monerod sockets with the Tor clients."
           description: "Raise --rpc-max-connections-per-private-ip. When Onion Down fires while the counts look low, the count leak holds the onion-proxy IP: restart monerod at a quiet hour. See Onion RPC Connections High in docs/capacity.md."
@@ -227,7 +227,7 @@ groups:
               refId: C
         for: 15m
         annotations:
-          summary: '{{ printf "%.0f" .Values.B.Value }} public IP(s) hold as many RPC sockets as the per-IP cap'
+          summary: '{{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}An unknown number of{{ end }} public IP(s) hold as many RPC sockets as the per-IP cap'
           affected: "Clearnet RPC users behind that IP (VPN, carrier NAT). monerod refuses their next socket."
           first_step: "Run grep -E '^capacity_rpc_(public|limit)' /var/lib/node-exporter/textfile/capacity.prom."
           description: "A flat line at the cap means a shared IP or one busy client. A refused wallet changes to plain HTTP and does not sync. When the other box also sends Peer RPC Refused, the count leak may hold that IP. See Public IP At RPC Cap in docs/capacity.md."
@@ -270,7 +270,7 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: '{{ printf "%.0f" .Values.B.Value }} public IP(s) connect to the RPC again and again'
+          summary: '{{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}An unknown number of{{ end }} public IP(s) connect to the RPC again and again'
           affected: "Clearnet RPC users behind those IPs. Their wallets do not sync."
           first_step: "Look for a Public IP At RPC Cap or RPC Connections alert first. A refusal comes before the reconnects."
           description: "This is the pattern of a refused wallet that retries, or of a wallet that sends plain HTTP to the TLS port every 10 s. The wallet recovers when the user reopens it. Note the time since the last monerod restart: it is data for the count leak. See RPC Clients Reconnecting in docs/capacity.md."
@@ -315,7 +315,7 @@ groups:
               refId: C
         for: 15m
         annotations:
-          summary: "The 2 RPC threads are busy {{ humanizePercentage .Values.B.Value }} of the time"
+          summary: "The 2 RPC threads are busy {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the time"
           affected: "Clearnet RPC users and onion users. Requests wait, so wallets sync slowly."
           first_step: "In Grafana Explore run topk(5, sum by (method) (rate(monero_rpc_seconds_total[5m]))) to find the method."
           description: "get_blocks means wallet restores or catch-up. Short restore waves pass. For lasting load, move users to the other box or add a node. See RPC Busy High in docs/capacity.md."
@@ -358,7 +358,7 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "The 2 RPC threads are busy {{ humanizePercentage .Values.B.Value }} of the time"
+          summary: "The 2 RPC threads are busy {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the time"
           affected: "Clearnet RPC users and onion users. Requests queue, and wallets time out."
           first_step: "In Grafana Explore run topk(5, sum by (method) (rate(monero_rpc_seconds_total[5m]))) to find the method."
           description: "The thread count is fixed in the monerod build. Move users to the other box or add a node. See RPC Busy High in docs/capacity.md."
@@ -403,7 +403,7 @@ groups:
               refId: C
         for: 1h
         annotations:
-          summary: "At this pace the month uses {{ humanizePercentage .Values.B.Value }} of the included traffic"
+          summary: "At this pace the month uses {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the included traffic"
           affected: "Nobody. Traffic above the included amount costs money."
           first_step: "Split the egress in Grafana: P2P is monero_net_tx_bytes, RPC and Tor are capacity_netns_network_bytes_total."
           description: "Hetzner bills outgoing traffic only. For P2P cost, lower --limit-rate-up. For RPC growth, accept the cost or move the box to an EU location. See Monthly Traffic High in docs/capacity.md."
@@ -445,7 +445,7 @@ groups:
               refId: C
         for: 1h
         annotations:
-          summary: "This month used {{ humanizePercentage .Values.B.Value }} of the included traffic"
+          summary: "This month used {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the included traffic"
           affected: "Nobody. Each TB above the included amount costs money."
           first_step: "Split the egress in Grafana: P2P is monero_net_tx_bytes, RPC and Tor are capacity_netns_network_bytes_total."
           description: "The count starts again on the 1st of the month (UTC). See Monthly Traffic High in docs/capacity.md."
@@ -623,7 +623,7 @@ groups:
               refId: C
         for: 1h
         annotations:
-          summary: 'No weekly capacity digest for {{ printf "%.0f" .Values.B.Value }} days'
+          summary: 'No weekly capacity digest for {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} days'
           affected: "Monitoring only. The digest is also the weekly proof that Telegram works."
           first_step: "Run python3 /opt/monero-node/scripts/capacity-report.py --dry-run."
           description: "The digest runs from /etc/cron.d/monero-node-capacity on Monday at 13:00 UTC. Check the cron entry, and check that TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID exist in /opt/monero-node/.env. Keep their values out of logs. See Capacity Digest Missing in docs/capacity.md."
@@ -672,7 +672,7 @@ groups:
               refId: C
         for: 30m
         annotations:
-          summary: "The host sends {{ humanize .Values.B.Value }}bit/s"
+          summary: "The host sends {{ with .Values.B }}{{ humanize .Value }}bit/s{{ else }}at an unknown rate{{ end }}"
           affected: "Nobody yet. At this pace the month uses far more than the included traffic."
           first_step: "Split the egress by container in Grafana with capacity_netns_network_bytes_total."
           description: "P2P peaks come from peers that sync from this node. RPC peaks come from wallet restores. For one client, look for Public IP At RPC Cap. For P2P, consider --limit-rate-up. See Egress Rate High in docs/capacity.md."
@@ -715,7 +715,7 @@ groups:
               refId: C
         for: 30m
         annotations:
-          summary: "monerod uses {{ humanizePercentage .Values.B.Value }} of its CPU limit"
+          summary: "monerod uses {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of its CPU limit"
           affected: "Clearnet RPC users and onion users when the RPC slows."
           first_step: "Run docker stats --no-stream monerod. Then look at RPC Busy and the P2P peers in Grafana."
           description: "A resync or many syncing peers can cause this. Raise cpus in docker-compose.yml (the host has 4 vCPU) or add a node. See monerod CPU High in docs/capacity.md."
@@ -758,7 +758,7 @@ groups:
               refId: C
         for: 15m
         annotations:
-          summary: "The CPU limit throttles monerod in {{ humanizePercentage .Values.B.Value }} of the periods"
+          summary: "The CPU limit throttles monerod in {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the periods"
           affected: "Clearnet RPC users and onion users. Short bursts of RPC work wait."
           first_step: "Run docker stats --no-stream monerod. Then look at RPC Busy and the P2P peers in Grafana."
           description: "Raise cpus in docker-compose.yml (the host has 4 vCPU) or add a node. See monerod CPU High in docs/capacity.md."
@@ -802,7 +802,7 @@ groups:
               refId: C
         for: 15m
         annotations:
-          summary: "monerod anonymous memory is {{ humanizePercentage .Values.B.Value }} of its limit"
+          summary: "monerod anonymous memory is {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of its limit"
           affected: "Nobody yet. At the limit the kernel kills monerod, and all wallets drop for 1 to 2 minutes."
           first_step: "Watch capacity_cgroup_memory_anon_bytes in Grafana for an hour."
           description: "Raise mem_limit in docker-compose.yml before an OOM kill. The host has about 7.75 GB. See monerod Memory High in docs/capacity.md."
@@ -845,7 +845,7 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "monerod uses {{ humanizePercentage .Values.B.Value }} of its open-file limit"
+          summary: "monerod uses {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of its open-file limit"
           affected: "Nobody yet. At the limit monerod cannot accept connections."
           first_step: "Run grep -E '^capacity_process_(open_fds|fd_soft_limit)' /var/lib/node-exporter/textfile/capacity.prom."
           description: "Add ulimits nofile for monerod in docker-compose.yml. That needs a monerod restart. See monerod File Descriptors High in docs/capacity.md."
@@ -888,7 +888,7 @@ groups:
               refId: C
         for: 10m
         annotations:
-          summary: "monerod uses {{ humanizePercentage .Values.B.Value }} of its pids limit"
+          summary: "monerod uses {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of its pids limit"
           affected: "Nobody yet. At the limit monerod cannot start threads."
           first_step: "Run grep -E '^capacity_(cgroup_pids|process_threads)' /var/lib/node-exporter/textfile/capacity.prom."
           description: "Raise pids_limit for monerod in docker-compose.yml. That needs a monerod restart. See monerod File Descriptors High in docs/capacity.md."
@@ -931,7 +931,7 @@ groups:
               refId: C
         for: 30m
         annotations:
-          summary: '{{ printf "%.0f" .Values.B.Value }} sockets of the {{ .Labels.server }} RPC wait in CLOSE-WAIT'
+          summary: '{{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}An unknown number of{{ end }} sockets of the {{ .Labels.server }} RPC wait in CLOSE-WAIT'
           affected: "Maybe clearnet RPC users and onion users. The stuck sockets count against the limits."
           first_step: "Note the count and the time since the last monerod restart. When the count grows, restart monerod at a quiet hour: docker compose restart monerod."
           description: "This can be the per-IP count leak in a form that we can see. Add the data to the upstream bug report. See RPC Sockets Stuck in docs/capacity.md."
@@ -1018,7 +1018,7 @@ groups:
               refId: C
         for: 30m
         annotations:
-          summary: 'Tor uses {{ printf "%.2f" .Values.B.Value }} CPU cores'
+          summary: 'Tor uses {{ with .Values.B }}{{ printf "%.2f" .Value }}{{ else }}an unknown number of{{ end }} CPU cores'
           affected: "Onion users. Onion connections slow down."
           first_step: "In Grafana look at tor_hs_intro_num_total and tor_hs_intro_rejected_intro_req_count for an introduction flood."
           description: "For a flood, consider HiddenServicePoWDefensesEnabled 1 in the Tor config. See Tor CPU High in docs/capacity.md."
@@ -1062,7 +1062,7 @@ groups:
               refId: C
         for: 0s
         annotations:
-          summary: 'The onion-proxy dropped {{ printf "%.0f" .Values.B.Value }} connections in 15 minutes'
+          summary: 'The onion-proxy dropped {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} connections in 15 minutes'
           affected: "Onion users"
           first_step: "Run docker logs --tail 50 onion-proxy and look for worker_connections."
           description: "worker_connections is used up. Raise worker_connections in onion-proxy.conf, and add worker_rlimit_nofile plus ulimits in docker-compose.yml. See Onion Proxy Dropping Connections in docs/capacity.md."

@@ -412,7 +412,7 @@ groups:
               refId: C
         for: 15m
         annotations:
-          summary: 'monerod has {{ printf "%.0f" .Values.B.Value }} P2P peers'
+          summary: 'monerod has {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} P2P peers'
           affected: "Nobody yet. With few peers the node can fall behind."
           first_step: "Check that port 18080 is open, then run docker logs --tail 50 monerod."
           description: "The node normally keeps 32 outgoing peers. Check the network and port 18080, then docker logs --tail 50 monerod."
@@ -573,7 +573,7 @@ groups:
               refId: C
         for: 5m
         annotations:
-          summary: '{{ .Labels.mountpoint }} has {{ humanizePercentage .Values.B.Value }} free'
+          summary: '{{ .Labels.mountpoint }} has {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} free'
           affected: "All users of this box soon. monerod stops when the disk is full."
           first_step: "Free space now: docker image prune -f removes the dangling images. Then find the rest with du -sh /var/lib/docker/volumes/*."
           description: "Disk Usage Critical fires at 85% used. This is the last alert before the disk is full."
