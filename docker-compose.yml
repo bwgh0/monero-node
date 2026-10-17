@@ -76,7 +76,7 @@ services:
         max-file: "1"
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.29-alpine
     container_name: nginx
     restart: unless-stopped
     read_only: true
@@ -176,7 +176,7 @@ services:
     # Bridge between the onion and monerod. Plain HTTP and TLS clients both
     # work. It reaches only the restricted RPC (monerod:18089). No host port.
     # See onion-proxy.conf.
-    image: nginx:1.27-alpine
+    image: nginx:1.29-alpine
     container_name: onion-proxy
     restart: unless-stopped
     read_only: true
@@ -237,7 +237,7 @@ services:
       driver: "none"
 
   monerod-rpc-proxy:
-    image: nginx:1.27-alpine
+    image: nginx:1.29-alpine
     container_name: monerod-rpc-proxy
     restart: unless-stopped
     read_only: true
