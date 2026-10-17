@@ -1,0 +1,45 @@
+name: CI
+
+# Lint, then boot the whole stack on amd64 (the boxes are amd64) and run
+# the deploy gate against it. The deploy workflow calls this first, and
+# deploys nothing unless it passes.
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]  # main runs it inside the deploy workflow
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: shellcheck and actionlint
+        run: ci/lint.sh
+
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Use docker compose v5.0.1, the oldest version on the boxes
+        env:
+          COMPOSE_URL: https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-x86_64
+          COMPOSE_SHA256: cdc1df64412ed009312afbc044b3625144d06c07736e2f7a77fb0460531b9327
+        run: |
+          mkdir -p ~/.docker/cli-plugins
+          curl -fsSL -o ~/.docker/cli-plugins/docker-compose "$COMPOSE_URL"
+          echo "$COMPOSE_SHA256  $HOME/.docker/cli-plugins/docker-compose" | sha256sum -c -
+          chmod 755 ~/.docker/cli-plugins/docker-compose
+          docker compose version
+      - name: Boot the stack on amd64 and run the deploy gate
+        run: ci/smoke.sh

@@ -1,0 +1,6 @@
+# CI only (ci/smoke.sh and ci/simulate-deploy.sh). The boxes never use it.
+# monerod keeps every production flag and adds --offline: no peers and no
+# chain sync. The image entrypoint puts "monerod" in front of the arguments.
+services:
+  monerod:
+    entrypoint: ["/entrypoint.sh", "--offline"]
