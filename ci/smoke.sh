@@ -104,13 +104,40 @@ if ! docker compose exec -T monerod-rpc-proxy nginx -t -q 2>&1 | mask; then
 fi
 ok "monerod-rpc-proxy: nginx -t -q"
 
+# A Tor with an empty cache downloads all the relay descriptors. Now and
+# then it stalls at "Loading relay descriptors" for minutes on a runner,
+# while the next start bootstraps in seconds (2026-10-17: 2 smoke runs failed
+# so). The boxes keep their Tor cache. So give each Tor 150 s, restart a
+# stalled one once, and then let the gate judge it as before.
+tor_bootstrapped_ci() {
+    local svc=$1 i logs
+    for ((i = 0; i < 30; i++)); do
+        # A variable, not a pipe to grep -q: with pipefail, an early exit of
+        # grep can fail the pipe.
+        logs=$(docker compose logs --no-log-prefix "$svc" 2>/dev/null) || logs=""
+        [[ $logs != *"Bootstrapped 100%"* ]] || return 0
+        sleep 5
+    done
+    return 1
+}
+restart_stalled_tor() {
+    local svc
+    for svc in tor tor-client; do
+        tor_bootstrapped_ci "$svc" && continue
+        printf 'warn  %s\n' "$svc did not bootstrap in 150 s. Restart it once."
+        docker compose restart "$svc"
+    done
+}
+
 step "deploy gate"
 onion=$(onion_name) || bad "tor wrote no onion name"
 key=$(onion_key_sha256)
+restart_stalled_tor
 env "${gate_env[@]}" bash scripts/deploy.sh gate --onion "$onion" --key-sha256 "$key"
 
 step "recreate tor. The onion name and key must stay the same."
 docker compose up -d --no-deps --force-recreate --wait tor
+restart_stalled_tor
 env "${gate_env[@]}" bash scripts/deploy.sh gate --onion "$onion" --key-sha256 "$key"
 
 step "Grafana loaded all of the provisioning"
