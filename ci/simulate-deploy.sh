@@ -23,6 +23,9 @@ box=$work/box/monero-node
 backups=$work/backups
 # A valid onion name that this box does not have
 wrong_onion=zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion
+# Case J: a "new" monerod image, a local tag of the one in docker-compose.yml
+monerod_image=ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5
+new_monerod=mnsim-local/simple-monerod:sim-j
 results=()
 rc=0
 
@@ -37,6 +40,7 @@ finish() {
         step "tear down"
         teardown
     fi
+    docker rmi "$new_monerod" >/dev/null 2>&1 || true
     rm -rf "$work"
     step "results"
     printf '%s\n' "${results[@]}"
@@ -338,6 +342,55 @@ docker compose exec -T monerod-rpc-proxy curl -sf --max-time 10 http://localhost
     bad "the rpc proxy does not reach monerod after the rollback"
 sha=$good
 record "I new fault: the rpc proxy check regressed, rolled back to H, the proxy works again"
+
+step "case J: a new monerod image and a broken tor: no automatic rollback"
+t0=$SECONDS
+docker tag "$monerod_image" "$new_monerod"
+sha=$(change "a new monerod image, and a broken tor entrypoint" sed -i -e "s|image: $monerod_image|image: $new_monerod|" \
+    -e 's|entrypoint: \["tor"\]|entrypoint: ["/usr/bin/tor"]|' docker-compose.yml)
+[[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c -e "image: $new_monerod" -e '"/usr/bin/tor"') == 3 ]] ||
+    bad "the case J change did not apply"
+extra_env=(GATE_TIMEOUT=60)
+deploy_ssh "$sha" 778
+want_rc 5
+want_head "$sha"
+grep -q "WARN  monerod keeps data in a volume, and its image changes from $monerod_image to $new_monerod" "$work/last.log" ||
+    bad "no warning before the monerod image change"
+grep -q 'FAIL  MANUAL ACTION NEEDED on' "$work/last.log" || bad "the box log does not say MANUAL ACTION NEEDED"
+grep -q 'MANUAL ACTION NEEDED::' "$work/last.log" || bad "deploy-ssh.sh did not report MANUAL ACTION NEEDED"
+! grep -q 'Roll back to' "$work/last.log" || bad "it rolled back after a new monerod image"
+[[ $(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -aq monerod)") == "$new_monerod" ]] ||
+    bad "monerod does not run the new image"
+j=$sha
+record "J new monerod image and broken tor: exit 5, MANUAL ACTION NEEDED, no rollback, the box stays on J"
+
+step "case J2: from J, a good change while tor still fails: no rollback"
+t0=$SECONDS
+sha=$(change_from "$j" "a prometheus.yml comment for case J2" sh -c 'printf "# case J2\n" >> monitoring/prometheus.yml')
+extra_env=(GATE_TIMEOUT=60)
+deploy deploy "$sha"
+want_rc 0
+want_head "$sha"
+grep -q 'docker compose up --wait failed, but every service runs the config of' "$work/last.log" ||
+    bad "no config check after the failed wait"
+grep -q 'WARN  already failing before the change: tor has bootstrapped' "$work/last.log" ||
+    bad "the summary does not call tor already failing"
+! grep -q 'keeps data in a volume' "$work/last.log" || bad "a change with the same images got a data warning"
+record "J2 from J, a good change while tor fails: deployed (exit 0), the tor checks already failing"
+
+step "case J3: deploy base again: monerod gets its old image, tor works again"
+t0=$SECONDS
+deploy deploy "$base"
+want_rc 0
+want_head "$base"
+want_all_running
+want_same_onion
+grep -q 'PASS  tor has bootstrapped (it failed before the change)' "$work/last.log" || bad "the gate does not say that tor works again"
+grep -q "WARN  monerod keeps data in a volume, and its image changes from $new_monerod to $monerod_image" "$work/last.log" ||
+    bad "no warning before the monerod image change"
+monerod_started=$(started monerod)
+sha=$base
+record "J3 back to base: deployed (exit 0), the tor checks pass again, onion and key same"
 
 step "case G: a change to monerod only. The rpc proxy must follow the new monerod."
 t0=$SECONDS

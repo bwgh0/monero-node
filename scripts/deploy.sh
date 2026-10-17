@@ -28,6 +28,10 @@
 #   2  failed, and the rollback failed too. The box needs a person now.
 #   3  stopped before any change (lock, wrong box, onion key, backup, fetch, bad --run-dir)
 #   4  (follow) no deploy started in --run-dir
+#   5  MANUAL ACTION NEEDED. It failed after a new image for a service that
+#      keeps data in a volume, like monerod. The old image could fail on
+#      data that the new image migrated, so there was no automatic
+#      rollback. The box stays on --target.
 #
 # The tor-keys volume is only read, by a throwaway read-only container.
 # Nothing here writes to it or removes it, not even in a rollback.
@@ -54,6 +58,10 @@ STATUS_OK='"status"[[:space:]]*:[[:space:]]*"OK"'
 KNOWN="already failing before the change"
 # Files that only the box has. No deployed commit may track them.
 BOX_FILES=(.env aws docker-compose.override.yml tor-keys)
+# Volumes that no image migrates, so a rollback is safe with them: tor
+# reads its keys as they are, onion-sock holds only a socket, and
+# certbot-www holds only ACME challenge files.
+ROLLBACK_SAFE_VOLUMES=(tor-keys onion-sock certbot-www)
 # Not a file when bash reads this script from stdin ("bash -s -- gate ...")
 SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" || true)
 
@@ -342,6 +350,46 @@ repo_binds() {
         done
 }
 
+# "<service> <image> <1 when it keeps data>" for each service. A service
+# keeps data when it mounts a named volume read-write that is not in
+# ROLLBACK_SAFE_VOLUMES.
+service_images() {
+    docker compose config --format json | python3 -c '
+import json, sys
+safe = set(sys.argv[1:])
+c = json.load(sys.stdin)
+for name, svc in sorted(c["services"].items()):
+    data = any(v.get("type") == "volume" and v.get("source") not in safe and not v.get("read_only")
+               for v in svc.get("volumes") or [])
+    print(name, svc.get("image") or "-", int(data))
+' "${ROLLBACK_SAFE_VOLUMES[@]}"
+}
+
+# mark_stateful <service images before the checkout>: writes each service
+# that keeps data and gets another image to $GATE_DIR/stateful. It runs
+# before the first container changes. After it, a failed deploy gets no
+# automatic rollback, because the new image may migrate the data.
+mark_stateful() {
+    local now svc image data old new
+    local -A was_image=() was_data=()
+    now=$(service_images)
+    while read -r svc image data; do
+        [[ -n $svc ]] || continue
+        was_image[$svc]=$image
+        was_data[$svc]=$data
+    done <<<"$1"
+    : >"$GATE_DIR/stateful"
+    while read -r svc image data; do
+        [[ -n $svc && -n ${was_image[$svc]:-} && ${was_image[$svc]} != "$image" ]] || continue
+        if [[ $data == 1 || ${was_data[$svc]} == 1 ]]; then
+            printf '%s %s %s\n' "$svc" "${was_image[$svc]}" "$image" >>"$GATE_DIR/stateful"
+        fi
+    done <<<"$now"
+    while read -r svc old new; do
+        warn "$svc keeps data in a volume, and its image changes from $old to $new. From here on, a failure gets no automatic rollback."
+    done <"$GATE_DIR/stateful"
+}
+
 # Every service has a container with the compose config of the checkout
 config_applied() {
     local hashes svc hash id label rc=0
@@ -367,12 +415,17 @@ config_applied() {
 # plain "up" recreates the services whose compose definition changed, and
 # waits for all of them. Nothing else restarts, so a deploy that does not
 # touch monerod leaves it running.
+# switch_to <commit> [forward]: forward also marks a new image for a service
+# that keeps data (see mark_stateful). A rollback does not.
 switch_to() {
-    local commit=$1 svc path id key
+    local commit=$1 mode=${2:-} svc path id key images=""
     local -A fp_before=() id_before=() id_after=() stale=() known=()
 
     while read -r svc path; do fp_before["$svc $path"]=$(fingerprint "$path"); done < <(repo_binds)
     while read -r svc id; do id_before[$svc]=$id; done < <(service_ids)
+    if [[ $mode == forward ]]; then
+        images=$(service_images)
+    fi
 
     log "check out $commit"
     git reset -q --hard "$commit"
@@ -384,6 +437,9 @@ switch_to() {
     log "pull the images that are not on this box"
     docker compose pull --policy missing --quiet
     host_setup
+    if [[ $mode == forward ]]; then
+        mark_stateful "$images"
+    fi
 
     for svc in "${SERVICES[@]}"; do known[$svc]=1; done
     for key in "${!fp_before[@]}"; do
@@ -851,7 +907,7 @@ phase() {
 }
 
 forward() {
-    switch_to "$TARGET"
+    switch_to "$TARGET" forward
     gate post "$GATE_TIMEOUT" "after the change"
 }
 
@@ -905,6 +961,7 @@ deploy_exit() {
 }
 
 cmd_deploy() {
+    local svc old new
     need_target
     need_domain
     need_onion
@@ -933,6 +990,14 @@ cmd_deploy() {
         summarize_known
         pass "deployed $TARGET to $DOMAIN"
         exit 0
+    fi
+
+    if [[ -s $GATE_DIR/stateful ]]; then
+        while read -r svc old new; do
+            fail "$svc keeps data in a volume, and the deploy changed its image from $old to $new"
+        done <"$GATE_DIR/stateful"
+        fail "MANUAL ACTION NEEDED on $DOMAIN. The deploy of $TARGET failed, and the old image could fail on data that the new image migrated. So there was no automatic rollback, and the box stays on $TARGET."
+        exit 5
     fi
 
     fail "the deploy of $TARGET failed. Roll back to $PREV"
