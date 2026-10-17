@@ -11,6 +11,7 @@
 # On the box itself, as root:
 #   scripts/deploy.sh deploy --target <full sha> --domain eu.node.monero.one --onion <name>.onion
 #   scripts/deploy.sh gate --onion <name>.onion
+# By hand only: add --allow-mixed-data to deploy a new monerod image together with other changes.
 #
 # Commands:
 #   deploy  run the gate, check out --target and start it, run the gate again,
@@ -22,8 +23,9 @@
 #   render  fill the ${DOMAIN} and ${TELEGRAM_CHAT_ID} templates in the checkout
 #
 # Options: --target <full sha>, --domain <box name>, --onion <name>.onion,
-# --run-dir <dir> (start, follow), and --key-sha256 <hex> (deploy, gate): the
-# sha256 of the onion secret key that the box must have.
+# --run-dir <dir> (start, follow), --key-sha256 <hex> (deploy, gate): the
+# sha256 of the onion secret key that the box must have, and
+# --allow-mixed-data (deploy, start; by hand only, see mixed_data_guard).
 #
 # Exit codes of deploy, start and follow:
 #   0  deployed, and no check regressed. The log lists the checks that
@@ -31,7 +33,8 @@
 #   1  a step failed or a check regressed, so it rolled back. After the
 #      rollback, every check passed that passed before the change.
 #   2  failed, and the rollback failed too. The box needs a person now.
-#   3  stopped before any change (lock, wrong box, onion key, backup, fetch, bad --run-dir)
+#   3  stopped before any change (lock, wrong box, onion key, backup, fetch, bad --run-dir,
+#      a new image for a service with data together with other changes)
 #   4  (follow) no deploy started in --run-dir
 #   5  MANUAL ACTION NEEDED. It failed after a service that keeps data in a
 #      volume, like monerod, started on a new image. The old image could
@@ -82,7 +85,7 @@ ROLLBACK_OK_VOLUMES=(tor-keys onion-sock certbot-www certbot-conf prometheus-dat
 # Not a file when bash reads this script from stdin ("bash -s -- gate ...")
 SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" || true)
 
-CMD="" TARGET="" DOMAIN="" ONION="" KEY_SHA256="" RUN_DIR="" COMPOSE_VERSION=""
+CMD="" TARGET="" DOMAIN="" ONION="" KEY_SHA256="" RUN_DIR="" COMPOSE_VERSION="" ALLOW_MIXED_DATA=0
 PREV="" BASE_KEY="" PROJECT="" TOR_IMAGE="" TOR_KEYS_VOLUME="" CERTS_VOLUME="" CERTBOT_IMAGE=""
 GATE_MODE=post GATE_PASS=1 GATE_DEADLINE=0 GATE_DIR="" GATE_FILE="" PRE_HEIGHT="" PHASE_RC=0
 SERVICES=() ARGS=()
@@ -163,6 +166,11 @@ usage() {
 parse_args() {
     while (($#)); do
         case $1 in
+            --allow-mixed-data)
+                ALLOW_MIXED_DATA=1
+                shift
+                continue
+                ;;
             --target) TARGET=${2:-} ;;
             --domain) DOMAIN=${2:-} ;;
             --onion) ONION=${2:-} ;;
@@ -450,6 +458,103 @@ new_image_ran() {
         fi
     done <"$GATE_DIR/stateful"
     ((ran))
+}
+
+# compose_snapshot <commit> <file>: writes "<service> <config hash> <image>
+# <1 when it keeps data> <files it mounts from the checkout>..." for each
+# service of a commit. It reads a copy of the commit in $GATE_DIR/tree, with
+# links to the files that only the box has. Both commits use the same path,
+# so their hashes compare. Only this summary goes to the file: the full
+# config holds secrets from .env.
+compose_snapshot() {
+    local commit=$1 out=$2 tree f hashes
+    rm -rf -- "$GATE_DIR/tree"
+    mkdir -p "$GATE_DIR/tree" || return 1
+    tree=$(cd "$GATE_DIR/tree" && pwd -P) || return 1
+    git archive "$commit" | tar -x -C "$tree" || return 1
+    for f in "${BOX_FILES[@]}"; do
+        if [[ -e $REPO_DIR/$f ]]; then
+            ln -s "$REPO_DIR/$f" "$tree/$f" || return 1
+        fi
+    done
+    (
+        cd "$tree" || exit 1
+        hashes=$(docker compose -p "$PROJECT" config --hash '*') || exit 1
+        docker compose -p "$PROJECT" config --format json | python3 -c '
+import json, sys
+tree, ok = sys.argv[1], set(sys.argv[3:])
+hashes = dict(l.split()[:2] for l in sys.argv[2].splitlines() if len(l.split()) == 2)
+for name, svc in sorted(json.load(sys.stdin)["services"].items()):
+    vols = svc.get("volumes") or []
+    data = any(v.get("type") == "volume" and v.get("source") not in ok and not v.get("read_only")
+               for v in vols)
+    binds = [v["source"][len(tree) + 1:] for v in vols
+             if v.get("type") == "bind" and v.get("source", "").startswith(tree + "/")]
+    print(name, hashes.get(name, "-"), svc.get("image") or "-", int(data), *binds)
+' "$tree" "$hashes" "${ROLLBACK_OK_VOLUMES[@]}"
+    ) >"$out"
+}
+
+# Prints "data <service> <old image> <new image>" for each service that keeps
+# data and gets a new image from PREV to TARGET, and "other <service>" for
+# each other service that the deploy adds, removes or changes: its compose
+# definition, or a file that it mounts from the checkout.
+mixed_changes() {
+    local dir=$GATE_DIR/compare
+    mkdir -p "$dir" || return 1
+    compose_snapshot "$PREV" "$dir/prev" || return 1
+    compose_snapshot "$TARGET" "$dir/target" || return 1
+    # --no-renames: a moved file lists both paths
+    git diff --no-renames --name-only "$PREV" "$TARGET" >"$dir/files" || return 1
+    python3 -c '
+import sys
+d = sys.argv[1]
+def load(side):
+    s = {}
+    for line in open(d + "/" + side):
+        f = line.split()
+        if len(f) >= 4:
+            s[f[0]] = (f[1], f[2], f[3] == "1", f[4:])
+    return s
+prev, target = load("prev"), load("target")
+files = [l.strip() for l in open(d + "/files") if l.strip()]
+def mounts_changed(binds):
+    return any(f == b or f.startswith(b + "/") for b in binds for f in files)
+data = [n for n in sorted(set(prev) & set(target))
+        if prev[n][1] != target[n][1] and (prev[n][2] or target[n][2])]
+for n in data:
+    print("data", n, prev[n][1], target[n][1])
+for n in sorted(set(prev) | set(target)):
+    p, t = prev.get(n), target.get(n)
+    if n in data:
+        continue
+    if p is None or t is None or "-" in (p[0], t[0]) or p[0] != t[0] or mounts_changed(p[3] + t[3]):
+        print("other", n)
+' "$dir"
+}
+
+# A deploy that gives a service with data a new image may change nothing
+# else, except that service's own flags and env. A fault in another change
+# would fail the deploy after the new image started, and then there is no
+# automatic rollback (exit 5). So such a deploy stops before any change,
+# unless --allow-mixed-data (by hand only; the workflow never passes it).
+mixed_data_guard() {
+    local out kind svc old new data="" others=""
+    out=$(mixed_changes) || die 3 "cannot compare the compose config of $PREV and $TARGET"
+    rm -rf -- "$GATE_DIR/tree" "$GATE_DIR/compare"
+    while read -r kind svc old new; do
+        case $kind in
+            data) data+="${data:+, }$svc ($old to $new)" ;;
+            other) others+="${others:+ }$svc" ;;
+        esac
+    done <<<"$out"
+    [[ -n $data && -n $others ]] || return 0
+    if ((ALLOW_MIXED_DATA)); then
+        warn "--allow-mixed-data: a service that keeps data gets a new image: $data. The same deploy also changes: $others. A failure after the new image starts gets no automatic rollback."
+        return 0
+    fi
+    fail "a service that keeps data gets a new image: $data. The same deploy also changes: $others."
+    die 3 "deploy the data image change alone. First deploy a commit that changes only that service (its flags and env may change too), then the other changes. By hand, --allow-mixed-data deploys them together."
 }
 
 # Every service has a container with the compose config of the checkout
@@ -1035,6 +1140,7 @@ cmd_deploy() {
     preflight
     GATE_DIR=$(mktemp -d "$STATE_DIR/gate.XXXXXX")
     log "deploy $TARGET to $DOMAIN (the box runs $PREV)"
+    mixed_data_guard
 
     # The gate before the change only reads. It records which checks pass,
     # so that a check that fails already cannot cause a rollback later.

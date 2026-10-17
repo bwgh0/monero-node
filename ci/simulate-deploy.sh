@@ -92,14 +92,16 @@ deploy() {
     extra_env=()
 }
 
-# deploy_ssh <sha> [run id]: runs scripts/deploy-ssh.sh as the workflow
-# does, or with no run id as a person does by hand (no SSH_KEY). A stand-in
-# ssh runs the box commands here. Sets rc and known (the already_failing
-# output).
+# deploy_ssh <sha> [run id] [more args]: runs scripts/deploy-ssh.sh as the
+# workflow does, or with no run id ("") as a person does by hand (no
+# SSH_KEY). A stand-in ssh runs the box commands here. Sets rc and known
+# (the already_failing output).
 deploy_ssh() {
-    local -a how=(SSH_KEY= GITHUB_RUN_ID=)
-    if [[ -n ${2:-} ]]; then
-        how=(SSH_KEY=not-a-key GITHUB_RUN_ID="$2" GITHUB_RUN_ATTEMPT=1)
+    local sha=$1 run=${2:-}
+    local -a how=(SSH_KEY= GITHUB_RUN_ID= GITHUB_ACTIONS=)
+    shift $(($# < 2 ? $# : 2))
+    if [[ -n $run ]]; then
+        how=(SSH_KEY=not-a-key GITHUB_RUN_ID="$run" GITHUB_RUN_ATTEMPT=1)
     fi
     : >"$work/gh-output"
     set +e
@@ -107,7 +109,7 @@ deploy_ssh() {
         cd "$root" &&
             env "${deploy_env[@]}" "${extra_env[@]}" "${how[@]}" PATH="$work/fake-ssh:$PATH" KNOWN_HOSTS="$work/known_hosts" \
                 GITHUB_OUTPUT="$work/gh-output" RUNS_DIR="$runs" \
-                scripts/deploy-ssh.sh sim.box.invalid "$domain" "$onion" "$1"
+                scripts/deploy-ssh.sh sim.box.invalid "$domain" "$onion" "$sha" "$@"
     ) 2>&1 | sed -u 's/^/  ssh| /' | tee "$work/last.log"
     rc=${PIPESTATUS[0]}
     set -e
@@ -377,17 +379,33 @@ monerod_started=$(started monerod)
 sha=$good
 record "M new monerod image that never starts: rolled back (exit 1) to H, monerod runs its old image, onion and key same"
 
-step "case J: the new monerod image starts, then tor fails: no automatic rollback"
+step "case J: a new monerod image and a broken tor in one commit: refused before any change"
 t0=$SECONDS
+before=$(ids)
 docker tag "$monerod_image" "$new_monerod"
 sha=$(change "a new monerod image, and a broken tor entrypoint" sed -i -e "s|image: $monerod_image|image: $new_monerod|" \
     -e 's|entrypoint: \["tor"\]|entrypoint: ["/usr/bin/tor"]|' docker-compose.yml)
 [[ $(git -C "$dev" show "$sha:docker-compose.yml" | grep -c -e "image: $new_monerod" -e '"/usr/bin/tor"') == 3 ]] ||
     bad "the case J change did not apply"
-extra_env=(GATE_TIMEOUT=60)
 deploy_ssh "$sha" 778
+want_rc 3
+want_head "$good"
+[[ $(ids) == "$before" ]] || bad "a container changed"
+want_monerod_untouched
+grep -qF "FAIL  a service that keeps data gets a new image: monerod ($monerod_image to $new_monerod). The same deploy also changes: " "$work/last.log" ||
+    bad "the box log does not name the data image change and the other changes"
+grep -qF 'deploy the data image change alone' "$work/last.log" || bad "the box log does not say to deploy the data image change alone"
+grep -q 'not deployed::' "$work/last.log" || bad "deploy-ssh.sh did not report exit 3"
+record "J new monerod image and broken tor in one commit: refused (exit 3), nothing changed"
+
+step "case J1: the same commit by hand with --allow-mixed-data: monerod starts on its new image, tor fails, no automatic rollback"
+t0=$SECONDS
+extra_env=(GATE_TIMEOUT=60)
+deploy_ssh "$sha" "" --allow-mixed-data
 want_rc 5
 want_head "$sha"
+grep -qF 'WARN  --allow-mixed-data: a service that keeps data gets a new image: monerod' "$work/last.log" ||
+    bad "no warning for --allow-mixed-data"
 grep -q "WARN  monerod keeps data in a volume, and its image changes from $monerod_image to $new_monerod" "$work/last.log" ||
     bad "no warning before the monerod image change"
 grep -q "FAIL  monerod started on its new image $new_monerod at " "$work/last.log" ||
@@ -398,9 +416,9 @@ grep -q 'MANUAL ACTION NEEDED::' "$work/last.log" || bad "deploy-ssh.sh did not 
 [[ $(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -aq monerod)") == "$new_monerod" ]] ||
     bad "monerod does not run the new image"
 j=$sha
-record "J new monerod image started, then tor failed: exit 5, MANUAL ACTION NEEDED, no rollback, the box stays on J"
+record "J1 the same by hand with --allow-mixed-data: monerod started on its new image, tor failed: exit 5, no rollback"
 
-step "case J2: from J, a good change while tor still fails: no rollback"
+step "case J2: from J1, a good change while tor still fails: no rollback"
 t0=$SECONDS
 sha=$(change_from "$j" "a prometheus.yml comment for case J2" sh -c 'printf "# case J2\n" >> monitoring/prometheus.yml')
 extra_env=(GATE_TIMEOUT=60)
@@ -412,14 +430,15 @@ grep -q 'docker compose up --wait failed, but every service runs the config of' 
 grep -q 'WARN  already failing before the change: tor has bootstrapped' "$work/last.log" ||
     bad "the summary does not call tor already failing"
 ! grep -q 'keeps data in a volume' "$work/last.log" || bad "a change with the same images got a data warning"
-record "J2 from J, a good change while tor fails: deployed (exit 0), the tor checks already failing"
+record "J2 from J1, a good change while tor fails: deployed (exit 0), the tor checks already failing"
 
-step "case J3: deploy base again by hand: monerod gets its old image, tor works again"
+step "case J3: deploy base again by hand with --allow-mixed-data: monerod gets its old image, tor works again"
 t0=$SECONDS
-deploy_ssh "$base"
+local_runs() { find "$runs" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/local-[0-9]{10}' | wc -l; }
+n_local=$(local_runs)
+deploy_ssh "$base" "" --allow-mixed-data
 want_rc 0
-[[ $(find "$runs" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/local-[0-9]{10}' | wc -l) == 1 ]] ||
-    bad "the deploy by hand did not use a local-<unix time> run dir"
+(($(local_runs) == n_local + 1)) || bad "the deploy by hand did not use a local-<unix time> run dir"
 want_head "$base"
 want_all_running
 want_same_onion
@@ -428,7 +447,7 @@ grep -q "WARN  monerod keeps data in a volume, and its image changes from $new_m
     bad "no warning before the monerod image change"
 monerod_started=$(started monerod)
 sha=$base
-record "J3 back to base, by hand with no SSH_KEY: deployed (exit 0), the tor checks pass again, onion and key same"
+record "J3 back to base, by hand with --allow-mixed-data and no SSH_KEY: deployed (exit 0), tor works again, onion and key same"
 
 step "case G: a change to monerod only. The rpc proxy must follow the new monerod."
 t0=$SECONDS

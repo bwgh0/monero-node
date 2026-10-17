@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Runs scripts/deploy.sh on one box, from the deploy workflow or by hand.
-#   scripts/deploy-ssh.sh <host> <domain> <onion> <commit>
+#   scripts/deploy-ssh.sh <host> <domain> <onion> <commit> [--allow-mixed-data]
 # Env: SSH_KEY (the private key; by hand, leave it unset to use your own ssh
 # keys), KNOWN_HOSTS (the pinned host keys, default .github/known_hosts).
 # By hand, from the repo root, with the commit on origin/main:
 #   scripts/deploy-ssh.sh eu.node.monero.one eu.node.monero.one <EU onion> "$(git rev-parse origin/main)"
+# By hand only: add --allow-mixed-data to deploy a new monerod image together with other changes.
 #
 # It copies this commit's deploy.sh to the box and starts it there detached
 # from SSH, so a dropped connection cannot stop a deploy or a rollback
@@ -14,10 +15,18 @@
 # still fail after it.
 set -euo pipefail
 
-host=$1 domain=$2 onion=$3 commit=$4
+host=$1 domain=$2 onion=$3 commit=$4 mixed=${5:-}
 [[ $host =~ ^[a-z0-9.-]+$ && $domain =~ ^[a-z0-9.-]+$ ]] || { echo "::error::bad host or domain"; exit 3; }
 [[ $onion =~ ^[a-z2-7]{56}\.onion$ ]] || { echo "::error::bad onion name"; exit 3; }
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad commit sha"; exit 3; }
+if (($# > 5)) || [[ $mixed != "" && $mixed != --allow-mixed-data ]]; then
+    echo "::error::bad arguments after the commit"
+    exit 3
+fi
+if [[ -n $mixed && ${GITHUB_ACTIONS:-} == true ]]; then
+    echo "::error::--allow-mixed-data is for a deploy by hand only"
+    exit 3
+fi
 if [[ ${GITHUB_ACTIONS:-} == true ]]; then
     : "${SSH_KEY:?SSH_KEY is empty. Is the secret set?}"
     # GitHub hides a secret as a whole. A key has many lines, so hide each line too.
@@ -79,7 +88,7 @@ if ((rc == 0)); then
     echo "deploy $commit to $host"
     commands_off
     set +e
-    on_box bash "$remote" start --run-dir "$run_dir" --target "$commit" --domain "$domain" --onion "$onion" | tee -a "$out"
+    on_box bash "$remote" start --run-dir "$run_dir" --target "$commit" --domain "$domain" --onion "$onion" ${mixed:+"$mixed"} | tee -a "$out"
     rc=${PIPESTATUS[0]}
     for try in 1 2 3 4 5 6 7 8 9 10; do
         ((rc == 255)) || break
