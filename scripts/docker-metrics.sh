@@ -3,21 +3,30 @@
 # collector, so Grafana can alert on stopped, crashing or unhealthy containers.
 # Cron runs it every minute (scripts/docker-metrics.cron, installed as
 # /etc/cron.d/monero-node-docker-metrics by setup.sh and the deploy workflow).
+# For tests: COMPOSE_PROJECT, TEXTFILE_DIR and LOCK_FILE.
 set -euo pipefail
 
 PROJECT="${COMPOSE_PROJECT:-monero-node}"
 DIR="${TEXTFILE_DIR:-/var/lib/node-exporter/textfile}"
 OUT="${DIR}/docker.prom"
+# A hung dockerd must not hang the cron job: each docker call gets 10 s.
+# A call that fails or times out writes no new file, so Container Metrics
+# Stale fires.
+dk() { timeout -k 5 10 docker "$@"; }
 
+# One run at a time: a new run exits while the last run still runs.
+exec 9>"${LOCK_FILE:-/run/monero-node-docker-metrics.lock}"
+flock -n 9 || exit 0
 mkdir -p "${DIR}"
 TMP=$(mktemp "${DIR}/.docker.prom.XXXXXX")
 trap 'rm -f "${TMP}"' EXIT
 
-mapfile -t ids < <(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}")
-# No containers at all: exit without a new file, so Container Metrics Stale fires
+mapfile -t ids < <(dk ps -aq --filter "label=com.docker.compose.project=${PROJECT}")
+# No containers, or docker ps failed: exit without a new file, so Container
+# Metrics Stale fires
 [ "${#ids[@]}" -gt 0 ] || exit 1
 
-docker inspect --format \
+dk inspect --format \
     '{{.Name}} {{.State.Running}} {{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
     "${ids[@]}" |
 awk -v now="$(date +%s)" '
