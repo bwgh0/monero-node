@@ -1,0 +1,93 @@
+name: Watchdog
+
+# Checks both boxes from outside every 10 minutes: the RPC over TLS, the
+# height, Grafana and both onions over Tor. It sends a Telegram message
+# only for what the boxes cannot send: see scripts/watchdog.py and
+# docs/monitoring.md. The state (what failed and what went out) moves from
+# run to run as an artifact.
+#
+# GitHub turns off the schedules of a public repo after 60 days without a
+# commit. The weekly keepalive job turns this workflow on again, which
+# starts the 60 days again.
+on:
+  schedule:
+    - cron: "3-59/10 * * * *"  # every 10 minutes, away from the busy start of the hour
+    - cron: "41 7 * * 1"  # keepalive
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time, so each run reads the state of the run before it
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event.schedule != '41 7 * * 1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    permissions:
+      contents: read
+      actions: read  # the state artifact of the run before
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Start Tor
+        # The Tor image of tor-client in docker-compose.yml, pinned by digest.
+        # Its log stays in the container: the job reads only "Bootstrapped".
+        run: |
+          image=$(sed -nE 's/^ +image: (btcpayserver\/tor:[^ ]+)$/\1/p' docker-compose.yml | head -n 1)
+          [[ -n $image ]] || { echo "::error::No Tor image in docker-compose.yml"; exit 1; }
+          docker run -d --name tor -p 127.0.0.1:9050:9050 --user 104:107 \
+            --tmpfs /run/tor:uid=104,gid=107,mode=0700 --entrypoint tor "$image" \
+            --ignore-missing-torrc -f /nonexistent/torrc --defaults-torrc /nonexistent/torrc-defaults \
+            --Log "notice stdout" --DataDirectory /run/tor/data --SocksPort 0.0.0.0:9050 >/dev/null
+
+      - name: Get the state of the run before
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p state
+          id=$(gh api "repos/$REPO/actions/artifacts?name=watchdog-state&per_page=10" \
+            --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .id // empty') || id=""
+          if [[ -n $id ]] && gh api "repos/$REPO/actions/artifacts/$id/zip" >state.zip; then
+            unzip -o -q state.zip -d state && echo "state from artifact $id"
+          else
+            echo "::warning::No state from a run before. All failures count as new."
+          fi
+
+      - name: Check both boxes
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [[ -n $TELEGRAM_BOT_TOKEN ]]; then echo "::add-mask::$TELEGRAM_BOT_TOKEN"; fi
+          if [[ -n $TELEGRAM_CHAT_ID ]]; then echo "::add-mask::$TELEGRAM_CHAT_ID"; fi
+          python3 scripts/watchdog.py --state state/watchdog-state.json --tor-container tor
+
+      - name: Keep the state for the next run
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: watchdog-state
+          path: state/watchdog-state.json
+          retention-days: 3
+          if-no-files-found: ignore
+
+  keepalive:
+    if: github.event.schedule == '41 7 * * 1' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write  # to turn on the workflow
+    steps:
+      - name: Turn on this workflow again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh api -X PUT "repos/$REPO/actions/workflows/watchdog.yml/enable"
