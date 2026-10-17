@@ -32,6 +32,10 @@ services:
       # exporter from the rpc-proxy IP. Default per private IP is 25.
       # Must stay at or below --rpc-max-connections (default 100).
       - --rpc-max-connections-per-private-ip=50
+      # Each open wallet holds 1 socket. iOS adds 2 probe sockets per unlock.
+      # Homes, VPN exits and carrier NAT share one IP. The default of 3 refuses
+      # the 4th socket, and wallet2 then stays on plain HTTP until reopened.
+      - --rpc-max-connections-per-public-ip=10
       - --enforce-dns-checkpointing
       # Privacy hardening
       - --pad-transactions

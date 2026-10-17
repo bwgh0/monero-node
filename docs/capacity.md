@@ -11,7 +11,7 @@ Numbers from the capacity audit of October 2026, for one box.
 
 | Limit | Value | Set where | What happens at the limit | Bites at (estimate) | Level at the audit |
 |---|---|---|---|---|---|
-| Sockets per public IP, restricted RPC | 3 | default (`--rpc-max-connections-per-public-ip`) | monerod accepts and closes the socket. wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. | 2 iOS users behind one NAT at unlock; shared VPN, carrier NAT or Tor exit IPs | max 1 |
+| Sockets per public IP, restricted RPC | 10 (default 3) | `--rpc-max-connections-per-public-ip=10` | monerod accepts and closes the socket. wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. | 10 open wallets behind one IP, or 4 iOS unlocks at the same time (each unlock adds 2 sockets); shared VPN, carrier NAT or Tor exit IPs | max 1 |
 | Sockets in total, restricted RPC | 100 | default (`--rpc-max-connections`) | the same, for every new client | about 100 open wallets at one time. About 1,500 to 3,000 daily iOS users on the US box. 100 background-sync users fill it alone. | 1 to 2 |
 | Sockets per private IP (all Tor users share the onion-proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | every new Tor wallet fails | 50 open Tor wallets per node, about 400 to 500 daily Tor users | 0 |
 | RPC worker threads | 2 per server | fixed in the monerod build (`daemon/rpc.h`) | requests queue, and latency rises for all users | about 10 wallets that catch up at the same time | 2.6% of one thread |
