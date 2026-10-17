@@ -12,7 +12,9 @@ name: Watchdog
 # starts the 60 days again.
 on:
   schedule:
-    - cron: "3-59/10 * * * *"  # every 10 minutes, away from the busy start of the hour
+    # Every 10 minutes, away from the busy start of the hour. GitHub started
+    # no run of "3-59/10" in 2 h, so the minutes are listed one by one.
+    - cron: "3,13,23,33,43,53 * * * *"
     - cron: "41 7 * * 1"  # keepalive
   workflow_dispatch:
 
