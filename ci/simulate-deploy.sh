@@ -89,16 +89,21 @@ deploy() {
     extra_env=()
 }
 
-# deploy_ssh <sha> <run id>: runs scripts/deploy-ssh.sh as the workflow
-# does. A stand-in ssh runs the box commands here. Sets rc and known (the
-# already_failing output).
+# deploy_ssh <sha> [run id]: runs scripts/deploy-ssh.sh as the workflow
+# does, or with no run id as a person does by hand (no SSH_KEY). A stand-in
+# ssh runs the box commands here. Sets rc and known (the already_failing
+# output).
 deploy_ssh() {
+    local -a how=(SSH_KEY= GITHUB_RUN_ID=)
+    if [[ -n ${2:-} ]]; then
+        how=(SSH_KEY=not-a-key GITHUB_RUN_ID="$2" GITHUB_RUN_ATTEMPT=1)
+    fi
     : >"$work/gh-output"
     set +e
     (
         cd "$root" &&
-            env "${deploy_env[@]}" "${extra_env[@]}" PATH="$work/fake-ssh:$PATH" KNOWN_HOSTS="$work/known_hosts" \
-                SSH_KEY=not-a-key GITHUB_OUTPUT="$work/gh-output" GITHUB_RUN_ID="$2" GITHUB_RUN_ATTEMPT=1 RUNS_DIR="$runs" \
+            env "${deploy_env[@]}" "${extra_env[@]}" "${how[@]}" PATH="$work/fake-ssh:$PATH" KNOWN_HOSTS="$work/known_hosts" \
+                GITHUB_OUTPUT="$work/gh-output" RUNS_DIR="$runs" \
                 scripts/deploy-ssh.sh sim.box.invalid "$domain" "$onion" "$1"
     ) 2>&1 | sed -u 's/^/  ssh| /' | tee "$work/last.log"
     rc=${PIPESTATUS[0]}
@@ -378,10 +383,12 @@ grep -q 'WARN  already failing before the change: tor has bootstrapped' "$work/l
 ! grep -q 'keeps data in a volume' "$work/last.log" || bad "a change with the same images got a data warning"
 record "J2 from J, a good change while tor fails: deployed (exit 0), the tor checks already failing"
 
-step "case J3: deploy base again: monerod gets its old image, tor works again"
+step "case J3: deploy base again by hand: monerod gets its old image, tor works again"
 t0=$SECONDS
-deploy deploy "$base"
+deploy_ssh "$base"
 want_rc 0
+[[ $(find "$runs" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/local-[0-9]{10}' | wc -l) == 1 ]] ||
+    bad "the deploy by hand did not use a local-<unix time> run dir"
 want_head "$base"
 want_all_running
 want_same_onion
@@ -390,7 +397,7 @@ grep -q "WARN  monerod keeps data in a volume, and its image changes from $new_m
     bad "no warning before the monerod image change"
 monerod_started=$(started monerod)
 sha=$base
-record "J3 back to base: deployed (exit 0), the tor checks pass again, onion and key same"
+record "J3 back to base, by hand with no SSH_KEY: deployed (exit 0), the tor checks pass again, onion and key same"
 
 step "case G: a change to monerod only. The rpc proxy must follow the new monerod."
 t0=$SECONDS

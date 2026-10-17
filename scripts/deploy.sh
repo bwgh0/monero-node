@@ -3,7 +3,12 @@
 # rolls back to the previous commit when the deploy fails a step or breaks
 # a check that passed before it.
 #
-# The deploy workflow runs it through scripts/deploy-ssh.sh. By hand, as root:
+# The deploy workflow runs it through scripts/deploy-ssh.sh. To deploy by
+# hand the same way, from a checkout with root SSH access to the box, run
+# this for EU, and for US only after a good EU deploy (the onion names are
+# in .github/workflows/deploy.yml):
+#   scripts/deploy-ssh.sh eu.node.monero.one eu.node.monero.one <EU onion> "$(git rev-parse origin/main)"
+# On the box itself, as root:
 #   scripts/deploy.sh deploy --target <full sha> --domain eu.node.monero.one --onion <name>.onion
 #   scripts/deploy.sh gate --onion <name>.onion
 #

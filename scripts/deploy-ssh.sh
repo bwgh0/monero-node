@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Runs scripts/deploy.sh on one box, from the deploy workflow.
+# Runs scripts/deploy.sh on one box, from the deploy workflow or by hand.
 #   scripts/deploy-ssh.sh <host> <domain> <onion> <commit>
-# Env: SSH_KEY (the private key), KNOWN_HOSTS (the pinned host keys).
+# Env: SSH_KEY (the private key; by hand, leave it unset to use your own ssh
+# keys), KNOWN_HOSTS (the pinned host keys, default .github/known_hosts).
+# By hand, from the repo root, with the commit on origin/main:
+#   scripts/deploy-ssh.sh eu.node.monero.one eu.node.monero.one <EU onion> "$(git rev-parse origin/main)"
 #
 # It copies this commit's deploy.sh to the box and starts it there detached
 # from SSH, so a dropped connection cannot stop a deploy or a rollback
@@ -15,16 +18,22 @@ host=$1 domain=$2 onion=$3 commit=$4
 [[ $host =~ ^[a-z0-9.-]+$ && $domain =~ ^[a-z0-9.-]+$ ]] || { echo "::error::bad host or domain"; exit 3; }
 [[ $onion =~ ^[a-z2-7]{56}\.onion$ ]] || { echo "::error::bad onion name"; exit 3; }
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad commit sha"; exit 3; }
-: "${SSH_KEY:?SSH_KEY is empty. Is the secret set?}"
-# GitHub hides a secret as a whole. A key has many lines, so hide each line too.
 if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    : "${SSH_KEY:?SSH_KEY is empty. Is the secret set?}"
+    # GitHub hides a secret as a whole. A key has many lines, so hide each line too.
     while IFS= read -r line; do
         if [[ -n $line ]]; then echo "::add-mask::$line"; fi
     done <<<"$SSH_KEY"
 fi
 known_hosts=$(readlink -f "${KNOWN_HOSTS:-.github/known_hosts}")
+# A run dir name is <workflow run id>-<attempt>, or local-<unix time> by hand
+if [[ -n ${GITHUB_RUN_ID:-} ]]; then
+    run_id=$GITHUB_RUN_ID-${GITHUB_RUN_ATTEMPT:-1}
+else
+    run_id=local-$(date +%s)
+fi
 # RUNS_DIR is for ci/simulate-deploy.sh. It must match STATE_DIR on the box.
-run_dir=${RUNS_DIR:-/var/lib/monero-node-deploy/runs}/${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}
+run_dir=${RUNS_DIR:-/var/lib/monero-node-deploy/runs}/$run_id
 [[ $run_dir =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "::error::bad run dir $run_dir"; exit 3; }
 remote=$run_dir/deploy.sh
 
@@ -33,17 +42,20 @@ if ! grep -q "^$host ssh-ed25519 " "$known_hosts"; then
     exit 3
 fi
 
-key=$(mktemp)
+key=""
 out=$(mktemp) # a copy of the box output
-trap 'rm -f "$key" "$out"' EXIT
-chmod 600 "$key"
-printf '%s\n' "$SSH_KEY" >"$key"
-
+trap 'rm -f "$out" ${key:+"$key"}' EXIT
 ssh_opts=(
-    -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes
+    -o BatchMode=yes
     -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o HostKeyAlgorithms=ssh-ed25519
     -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR
 )
+if [[ -n ${SSH_KEY:-} ]]; then
+    key=$(mktemp)
+    chmod 600 "$key"
+    printf '%s\n' "$SSH_KEY" >"$key"
+    ssh_opts=(-i "$key" -o IdentitiesOnly=yes "${ssh_opts[@]}")
+fi
 # The remote command gets only checked values: hex, host names, paths
 # shellcheck disable=SC2029
 on_box() { ssh "${ssh_opts[@]}" "root@$host" "$@"; }

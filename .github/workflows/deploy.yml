@@ -5,6 +5,8 @@ name: Deploy monero-node
 # previous commit when a check fails that passed before the deploy. US
 # waits for a good EU deploy. A failure, or a check that already failed
 # before the deploy and still fails, sends a Telegram message.
+# A run by hand can skip the smoke test of CI (lint still runs). A push
+# always runs it. To deploy from a shell, see scripts/deploy.sh.
 on:
   push:
     branches: [main]
@@ -19,6 +21,11 @@ on:
           - all
           - eu
           - us
+      skip_smoke:
+        description: "Skip the CI smoke test (the stack boot on amd64). Lint still runs."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -37,6 +44,8 @@ env:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    with:
+      skip_smoke: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_smoke }}
 
   deploy-eu:
     needs: ci
@@ -101,6 +110,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CI_RESULT: ${{ needs.ci.result }}
+          SMOKE_SKIPPED: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_smoke }}
           EU_RESULT: ${{ needs.deploy-eu.result }}
           EU_RC: ${{ needs.deploy-eu.outputs.rc }}
           EU_KNOWN: ${{ needs.deploy-eu.outputs.already_failing }}
@@ -138,9 +148,13 @@ jobs:
               echo " Already failing before the deploy, so no rollback for these: $1"
             fi
           }
+          ci_note=""
+          if [[ $SMOKE_SKIPPED == true ]]; then
+            ci_note=" (smoke test skipped by hand)"
+          fi
           text="monero-node deploy: action needed
           Commit: ${GITHUB_SHA::7} ${COMMIT_MESSAGE%%$'\n'*}
-          CI: $CI_RESULT
+          CI: $CI_RESULT$ci_note
           EU: $(result "$EU_RESULT" "$EU_RC")$(known "$EU_KNOWN")
           US: $(result "$US_RESULT" "$US_RC")$(known "$US_KNOWN")
           $RUN_URL"

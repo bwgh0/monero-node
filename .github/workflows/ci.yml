@@ -8,6 +8,12 @@ on:
   push:
     branches-ignore: [main]  # main runs it inside the deploy workflow
   workflow_call:
+    inputs:
+      skip_smoke:
+        description: "Skip the smoke test. Only a deploy run by hand passes true."
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
 
 permissions:
@@ -25,6 +31,8 @@ jobs:
         run: ci/lint.sh
 
   smoke:
+    # inputs is empty outside workflow_call, so the smoke test runs there
+    if: ${{ !inputs.skip_smoke }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
