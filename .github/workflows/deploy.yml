@@ -1,5 +1,9 @@
 name: Deploy monero-node
 
+# CI first, then EU, then US. Each box runs scripts/deploy.sh: back up the
+# onion keys, deploy, check (scripts/deploy.sh gate), and roll back to the
+# previous commit when a check fails. US waits for a good EU deploy.
+# Any failure sends a Telegram message.
 on:
   push:
     branches: [main]
@@ -15,115 +19,113 @@ on:
           - eu
           - us
 
+permissions:
+  contents: read
+
+# One deploy at a time. A new push waits. It never cancels a deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # The iOS and Android apps have these names built in. They must never change.
+  # The deploy checks that each box serves its name with the same key as before.
+  ONION_EU: zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion
+  ONION_US: 5tvl5acn3sm7id4gzc4mj6n7lrwlyrhssr2r57zkxk6eugxwix4ze4qd.onion
+
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   deploy-eu:
-    if: >
-      github.event_name == 'push' ||
-      github.event.inputs.region == 'all' ||
-      github.event.inputs.region == 'eu'
-    runs-on: ubuntu-latest
+    needs: ci
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.region == 'all' || inputs.region == 'eu')
+    runs-on: ubuntu-24.04
     environment: production-eu
+    timeout-minutes: 50
+    outputs:
+      rc: ${{ steps.deploy.outputs.rc }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy to EU node
-        uses: appleboy/ssh-action@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          host: eu.node.monero.one
-          username: root
-          key: ${{ secrets.SSH_KEY_EU }}
-          script: |
-            cd /opt/monero-node
-
-            # Pull latest config files from repo
-            if [ -d .git ]; then
-              git fetch origin && git reset --hard origin/main
-            else
-              git clone https://github.com/${{ github.repository }}.git tmp && mv tmp/.git .git && rm -rf tmp && git checkout .
-            fi
-
-            # Apply templates from .env values
-            git checkout -- nginx.conf monitoring/grafana/provisioning/alerting/contactpoints.yml
-            sed -i 's/\${DOMAIN}/eu.node.monero.one/g' nginx.conf
-            source .env
-            sed -i "s/\${TELEGRAM_CHAT_ID}/${TELEGRAM_CHAT_ID}/g" monitoring/grafana/provisioning/alerting/contactpoints.yml
-
-            # Ensure private key is readable by monerod (runs as non-root).
-            # Certs live inside a Docker volume, so chmod must run in a container.
-            docker run --rm --entrypoint sh \
-              -v monero-node_certbot-conf:/etc/letsencrypt \
-              certbot/dns-route53:v3.1.0 \
-              -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
-
-            # Container state metrics for the Grafana container alerts
-            install -d -m 755 /var/lib/node-exporter/textfile
-            install -m 644 scripts/docker-metrics.cron /etc/cron.d/monero-node-docker-metrics
-
-            # Pull pinned images and restart
-            docker compose pull
-            docker compose up -d --remove-orphans
-
-            # Force-recreate containers with bind-mounted configs
-            # (docker restart doesn't pick up new file inodes from git checkout)
-            # monerod included to pick up any renewed TLS certs
-            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter onion-proxy blackbox
-
-            # Verify health
-            sleep 10
-            curl -sf http://localhost/health > /dev/null && echo "EU node healthy" || echo "EU node starting up..."
+          persist-credentials: false
+      - name: Deploy to EU, check it, roll back on failure
+        id: deploy
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY_EU }}
+          KNOWN_HOSTS: .github/known_hosts
+        run: scripts/deploy-ssh.sh eu.node.monero.one eu.node.monero.one "$ONION_EU" "$GITHUB_SHA"
 
   deploy-us:
-    if: >
-      github.event_name == 'push' ||
-      github.event.inputs.region == 'all' ||
-      github.event.inputs.region == 'us'
-    runs-on: ubuntu-latest
+    needs: [ci, deploy-eu]
+    # A push or "all" needs a good EU deploy first. "us" alone skips EU.
+    if: >-
+      !cancelled() &&
+      github.ref == 'refs/heads/main' &&
+      needs.ci.result == 'success' &&
+      (github.event_name == 'push' || inputs.region == 'all' || inputs.region == 'us') &&
+      (needs.deploy-eu.result == 'success' ||
+       (inputs.region == 'us' && needs.deploy-eu.result == 'skipped'))
+    runs-on: ubuntu-24.04
     environment: production-us
+    timeout-minutes: 50
+    outputs:
+      rc: ${{ steps.deploy.outputs.rc }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy to US node
-        uses: appleboy/ssh-action@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          host: us.node.monero.one
-          username: root
-          key: ${{ secrets.SSH_KEY_US }}
-          script: |
-            cd /opt/monero-node
+          persist-credentials: false
+      - name: Deploy to US, check it, roll back on failure
+        id: deploy
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY_US }}
+          KNOWN_HOSTS: .github/known_hosts
+        run: scripts/deploy-ssh.sh us.node.monero.one us.node.monero.one "$ONION_US" "$GITHUB_SHA"
 
-            # Pull latest config files from repo
-            if [ -d .git ]; then
-              git fetch origin && git reset --hard origin/main
-            else
-              git clone https://github.com/${{ github.repository }}.git tmp && mv tmp/.git .git && rm -rf tmp && git checkout .
-            fi
-
-            # Apply templates from .env values
-            git checkout -- nginx.conf monitoring/grafana/provisioning/alerting/contactpoints.yml
-            sed -i 's/\${DOMAIN}/us.node.monero.one/g' nginx.conf
-            source .env
-            sed -i "s/\${TELEGRAM_CHAT_ID}/${TELEGRAM_CHAT_ID}/g" monitoring/grafana/provisioning/alerting/contactpoints.yml
-
-            # Ensure private key is readable by monerod (runs as non-root).
-            # Certs live inside a Docker volume, so chmod must run in a container.
-            docker run --rm --entrypoint sh \
-              -v monero-node_certbot-conf:/etc/letsencrypt \
-              certbot/dns-route53:v3.1.0 \
-              -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
-
-            # Container state metrics for the Grafana container alerts
-            install -d -m 755 /var/lib/node-exporter/textfile
-            install -m 644 scripts/docker-metrics.cron /etc/cron.d/monero-node-docker-metrics
-
-            # Pull pinned images and restart
-            docker compose pull
-            docker compose up -d --remove-orphans
-
-            # Force-recreate containers with bind-mounted configs
-            # (docker restart doesn't pick up new file inodes from git checkout)
-            # monerod included to pick up any renewed TLS certs
-            docker compose up -d --force-recreate nginx prometheus grafana monerod monerod-rpc-proxy monero-exporter onion-proxy blackbox
-
-            # Verify health
-            sleep 10
-            curl -sf http://localhost/health > /dev/null && echo "US node healthy" || echo "US node starting up..."
+  notify:
+    needs: [ci, deploy-eu, deploy-us]
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Send the failure to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CI_RESULT: ${{ needs.ci.result }}
+          EU_RESULT: ${{ needs.deploy-eu.result }}
+          EU_RC: ${{ needs.deploy-eu.outputs.rc }}
+          US_RESULT: ${{ needs.deploy-us.result }}
+          US_RC: ${{ needs.deploy-us.outputs.rc }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z $TELEGRAM_BOT_TOKEN || -z $TELEGRAM_CHAT_ID ]]; then
+            echo "::error::Set the TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID repository secrets. No alert went out."
+            exit 1
+          fi
+          result() {
+            case $1/$2 in
+              success/*) echo "deployed" ;;
+              skipped/*) echo "not deployed" ;;
+              cancelled/*) echo "cancelled. A deploy that started on the box runs to its end. See the run log." ;;
+              failure/1) echo "FAILED, rolled back. The previous commit passed the checks." ;;
+              failure/2) echo "FAILED, and the ROLLBACK FAILED. The box needs a person now." ;;
+              failure/3) echo "stopped before any change" ;;
+              failure/4) echo "did not start (SSH)" ;;
+              *) echo "$1, no result from the box. See the run log." ;;
+            esac
+          }
+          text="monero-node deploy: action needed
+          Commit: ${GITHUB_SHA::7} ${COMMIT_MESSAGE%%$'\n'*}
+          CI: $CI_RESULT
+          EU: $(result "$EU_RESULT" "$EU_RC")
+          US: $(result "$US_RESULT" "$US_RC")
+          $RUN_URL"
+          curl -sS --fail --max-time 20 -o /dev/null \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=$text" \
+            --data-urlencode "disable_web_page_preview=true" \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
