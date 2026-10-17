@@ -164,7 +164,7 @@ Known limits:
   noDataState OK then gets no data, and its alert clears while the problem
   still runs. The alert comes again after the `for` time of the rule. This
   false CLEARED usually comes in the same update as the CLEARED of
-  Prometheus Unreachable. Container Unhealthy, RPC Slow and most capacity
+  Prometheus Unreachable. The container rules, RPC Slow and most capacity
   rules use instant queries. A rule with a range query of 5 or 10 minutes
   still gets data after an outage of up to about 10 or 15 minutes.
 

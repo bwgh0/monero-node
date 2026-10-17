@@ -32,6 +32,10 @@ dk inspect --format \
 awk -v now="$(date +%s)" '
 {
     name = substr($1, 2)
+    # While compose recreates a container, a container has a temporary name:
+    # 12 hex digits, "_" and the container name. Skip it. The next run shows
+    # the container under its own name.
+    if (index(name, "_") == 13 && substr(name, 1, 12) !~ /[^0-9a-f]/) next
     running[name] = ($2 == "true") ? 1 : 0
     restarts[name] = $3
     health[name] = $4

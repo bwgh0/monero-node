@@ -22,6 +22,11 @@ groups:
             datasourceUid: PBFA97CFB590B2093
             model:
               expr: docker_container_running
+              # Instant query, so a series that is gone drops out at once. A
+              # range query keeps the last value of a gone series for up to
+              # 10 minutes: a 0 for one minute then fires this rule.
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -68,6 +73,9 @@ groups:
               # RestartCount goes up only for restarts by the restart policy,
               # not for docker restart or a deploy.
               expr: increase(docker_container_restart_count[15m])
+              # Instant query, as in Container Down
+              instant: true
+              range: false
               refId: A
           - refId: B
             datasourceUid: __expr__
