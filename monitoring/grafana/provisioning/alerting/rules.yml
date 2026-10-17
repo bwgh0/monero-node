@@ -509,10 +509,15 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              # Free bytes in 14 days at the trend of the last 6 hours, for each
+              # Free bytes in 14 days at the trend of the last 3 days, for each
               # disk filesystem. On the boxes that is "/", which holds the chain
               # and all Docker data. A new data disk joins without a change here.
-              expr: predict_linear(node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}[6h], 14 * 24 * 3600)
+              # A window of 6 hours read the image pulls of one deploy (about
+              # 2 GB) as a fill rate and fired falsely (2026-10-17). Over 3 days,
+              # the step of one deploy can fire this rule only when less than
+              # about 17 GB is free, and Disk Usage Critical (85% used) fires
+              # before that.
+              expr: predict_linear(node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}[3d], 14 * 24 * 3600)
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -533,7 +538,7 @@ groups:
               refId: C
         for: 1h
         annotations:
-          summary: "{{ .Labels.mountpoint }} fills within 14 days at the trend of the last 6 hours"
+          summary: "{{ .Labels.mountpoint }} fills within 14 days at the trend of the last 3 days"
           affected: "Nobody yet. When the disk is full: clearnet RPC users and onion users."
           first_step: "Run docker system df and du -sh /var/lib/docker/volumes/* to find what grows."
           description: "A log that grows fast or a chain resync can cause this. The chain alone grows about 51 MB per day. monerod stops when the disk is full."
