@@ -1,0 +1,1070 @@
+apiVersion: 1
+
+# Capacity alerts: they fire before users notice a limit. Most data comes
+# from scripts/capacity-metrics.sh, which cron runs every minute and
+# node-exporter reads as a textfile. docs/capacity.md has the limits, the
+# runbook for each rule and the list of metrics.
+#
+# All queries are instant: reduce "last" then takes the value of now.
+# A rule with no data stays quiet (noDataState OK). Capacity Metrics Stale
+# covers missing data.
+# A rule whose query fails keeps its last state (execErrState KeepLast).
+# Prometheus Unreachable (rules.yml) alerts when the queries fail.
+
+groups:
+  - orgId: 1
+    name: capacity-alerts
+    folder: alerts
+    interval: 1m
+    rules:
+      - uid: alert-rpc-conns-high
+        title: RPC Connections High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Open sockets of the public (restricted) RPC against --rpc-max-connections.
+              # Every source counts: wallets, the onion-proxy and the probes.
+              expr: sum(capacity_rpc_connections{server="restricted"}) / max(capacity_rpc_limit{kind="total"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "Public RPC holds {{ humanizePercentage .Values.B.Value }} of its socket limit"
+          affected: "Nobody yet. At the limit monerod refuses new wallets: clearnet RPC users and onion users."
+          first_step: "Run grep -E '^capacity_rpc_(connections|limit)' /var/lib/node-exporter/textfile/capacity.prom to see the sockets by source."
+          description: "Open wallets fill the socket limit of the public RPC. At the limit each new wallet is refused and stays broken until the user reopens it. Many public sockets means real growth. Many sockets from one source means one client or the onion-proxy. See RPC Connections High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-rpc-conns-critical
+        title: RPC Connections Critical
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: sum(capacity_rpc_connections{server="restricted"}) / max(capacity_rpc_limit{kind="total"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "Public RPC holds {{ humanizePercentage .Values.B.Value }} of its socket limit"
+          affected: "Clearnet RPC users and onion users soon. At the limit monerod refuses every new wallet."
+          first_step: "Run grep -E '^capacity_rpc_(connections|limit)' /var/lib/node-exporter/textfile/capacity.prom to see the sockets by source."
+          description: "Raise the connection caps on both boxes, or move users to the other box. See RPC Connections High in docs/capacity.md."
+        labels:
+          severity: critical
+
+      - uid: alert-onion-conns-high
+        title: Onion RPC Connections High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # All onion wallets reach monerod from the IP of the onion-proxy, so
+              # they share the cap --rpc-max-connections-per-private-ip.
+              expr: >-
+                max(capacity_rpc_connections{server="restricted",source="onion"}) / max(capacity_rpc_limit{kind="private_ip"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "Onion wallets hold {{ humanizePercentage .Values.B.Value }} of the private-IP socket cap"
+          affected: "Nobody yet. At the cap monerod refuses new onion wallets."
+          first_step: "Run grep -E '^capacity_(rpc_connections.*onion|rpc_limit|onion_socket_clients)' /var/lib/node-exporter/textfile/capacity.prom to compare the monerod sockets with the Tor clients."
+          description: "A monerod count far above the Tor clients means pool sockets of the plain path or a client that reconnects. Keep --rpc-max-connections-per-private-ip at or below --rpc-max-connections, or monerod stops at start. See Onion RPC Connections High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-onion-conns-critical
+        title: Onion RPC Connections Critical
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                max(capacity_rpc_connections{server="restricted",source="onion"}) / max(capacity_rpc_limit{kind="private_ip"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "Onion wallets hold {{ humanizePercentage .Values.B.Value }} of the private-IP socket cap"
+          affected: "Onion users soon. At the cap monerod refuses every new onion wallet."
+          first_step: "Run grep -E '^capacity_(rpc_connections.*onion|rpc_limit|onion_socket_clients)' /var/lib/node-exporter/textfile/capacity.prom to compare the monerod sockets with the Tor clients."
+          description: "Raise --rpc-max-connections-per-private-ip. When Onion Down fires while the counts look low, the count leak holds the onion-proxy IP: restart monerod at a quiet hour. See Onion RPC Connections High in docs/capacity.md."
+        labels:
+          severity: critical
+
+      - uid: alert-rpc-ip-at-cap
+        title: Public IP At RPC Cap
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Public IPs with as many sockets as --rpc-max-connections-per-public-ip
+              expr: max(capacity_rpc_public_ips_at_cap{server="restricted"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 15m
+        annotations:
+          summary: '{{ printf "%.0f" .Values.B.Value }} public IP(s) hold as many RPC sockets as the per-IP cap'
+          affected: "Clearnet RPC users behind that IP (VPN, carrier NAT). monerod refuses their next socket."
+          first_step: "Run grep -E '^capacity_rpc_(public|limit)' /var/lib/node-exporter/textfile/capacity.prom."
+          description: "A flat line at the cap means a shared IP or one busy client. A refused wallet changes to plain HTTP and does not sync. When the other box also sends Peer RPC Refused, the count leak may hold that IP. See Public IP At RPC Cap in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-rpc-churn
+        title: RPC Clients Reconnecting
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Public IPs with 4 or more sockets that monerod closed in the last minute
+              expr: max(capacity_rpc_churn_ips{server="restricted"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 10m
+        annotations:
+          summary: '{{ printf "%.0f" .Values.B.Value }} public IP(s) connect to the RPC again and again'
+          affected: "Clearnet RPC users behind those IPs. Their wallets do not sync."
+          first_step: "Look for a Public IP At RPC Cap or RPC Connections alert first. A refusal comes before the reconnects."
+          description: "This is the pattern of a refused wallet that retries, or of a wallet that sends plain HTTP to the TLS port every 10 s. The wallet recovers when the user reopens it. Note the time since the last monerod restart: it is data for the count leak. See RPC Clients Reconnecting in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-rpc-busy-high
+        title: RPC Busy High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Busy time of the 2 RPC threads of the public server (hardcoded in
+              # monerod). The methods of monero-exporter run on the other server.
+              expr: >-
+                sum(rate(monero_rpc_seconds_total{job="monerod",method!~"get_connections|get_peer_list|get_net_stats|get_transaction_pool|get_transaction_pool_stats|rpc_access_tracking|get_block|get_last_block_header"}[5m])) / 2
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 15m
+        annotations:
+          summary: "The 2 RPC threads are busy {{ humanizePercentage .Values.B.Value }} of the time"
+          affected: "Clearnet RPC users and onion users. Requests wait, so wallets sync slowly."
+          first_step: "In Grafana Explore run topk(5, sum by (method) (rate(monero_rpc_seconds_total[5m]))) to find the method."
+          description: "get_blocks means wallet restores or catch-up. Short restore waves pass. For lasting load, move users to the other box or add a node. See RPC Busy High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-rpc-busy-critical
+        title: RPC Busy Critical
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                sum(rate(monero_rpc_seconds_total{job="monerod",method!~"get_connections|get_peer_list|get_net_stats|get_transaction_pool|get_transaction_pool_stats|rpc_access_tracking|get_block|get_last_block_header"}[5m])) / 2
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "The 2 RPC threads are busy {{ humanizePercentage .Values.B.Value }} of the time"
+          affected: "Clearnet RPC users and onion users. Requests queue, and wallets time out."
+          first_step: "In Grafana Explore run topk(5, sum by (method) (rate(monero_rpc_seconds_total[5m]))) to find the method."
+          description: "The thread count is fixed in the monerod build. Move users to the other box or add a node. See RPC Busy High in docs/capacity.md."
+        labels:
+          severity: critical
+
+      - uid: alert-traffic-projection
+        title: Monthly Traffic High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Egress of this month (UTC) at the pace so far, against the included
+              # traffic. Quiet on days 1 to 3, when the pace is not yet stable.
+              expr: >-
+                (max(capacity_host_tx_month_bytes) / ((day_of_month() - 1 + hour() / 24) / days_in_month()) / max(capacity_traffic_included_bytes)) and on() (day_of_month() >= 4)
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+              refId: C
+        for: 1h
+        annotations:
+          summary: "At this pace the month uses {{ humanizePercentage .Values.B.Value }} of the included traffic"
+          affected: "Nobody. Traffic above the included amount costs money."
+          first_step: "Split the egress in Grafana: P2P is monero_net_tx_bytes, RPC and Tor are capacity_netns_network_bytes_total."
+          description: "Hetzner bills outgoing traffic only. For P2P cost, lower --limit-rate-up. For RPC growth, accept the cost or move the box to an EU location. See Monthly Traffic High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-traffic-over
+        title: Included Traffic Used Up
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: max(capacity_host_tx_month_bytes) / max(capacity_traffic_included_bytes)
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [1]
+              refId: C
+        for: 1h
+        annotations:
+          summary: "This month used {{ humanizePercentage .Values.B.Value }} of the included traffic"
+          affected: "Nobody. Each TB above the included amount costs money."
+          first_step: "Split the egress in Grafana: P2P is monero_net_tx_bytes, RPC and Tor are capacity_netns_network_bytes_total."
+          description: "The count starts again on the 1st of the month (UTC). See Monthly Traffic High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-oom-kill
+        title: OOM Kill
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Kills on the whole host. The cgroup counter misses the kill of the
+              # main process of a container, because its cgroup goes away with it.
+              expr: max(increase(node_vmstat_oom_kill[10m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+              refId: C
+        for: 0s
+        annotations:
+          summary: "The kernel killed a process for lack of memory"
+          affected: "Users of that container. Docker restarts it. A monerod restart drops all wallets for 1 to 2 minutes."
+          first_step: "Run journalctl -k --since -1h | grep -i 'killed process' to find the process."
+          description: "Container Crashed fires too when Docker restarts the container. Check capacity_cgroup_memory_anon_bytes before the kill and the logs of the container. Raise mem_limit when the use is real growth. See OOM Kill in docs/capacity.md."
+        labels:
+          severity: critical
+
+      - uid: alert-capacity-stale
+        title: Capacity Metrics Stale
+        condition: C
+        noDataState: Alerting
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # A missing file gives 1e9, so that alerts too. 0 while node-exporter
+              # is down: System Exporter Down covers that.
+              expr: >-
+                ((time() - max(capacity_metrics_last_run_timestamp_seconds)) or vector(1e9)) * on() (max(up{job="node"}) == bool 1)
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [300]
+              refId: C
+        for: 5m
+        annotations:
+          summary: "The capacity metrics are older than 5 minutes"
+          affected: "Monitoring only. The capacity alerts are blind."
+          first_step: "Run bash /opt/monero-node/scripts/capacity-metrics.sh by hand to see the error."
+          description: "The cron job /etc/cron.d/monero-node-capacity has not updated /var/lib/node-exporter/textfile/capacity.prom. Check the cron entry and the textfile directory. See Capacity Metrics Stale in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-capacity-broken
+        title: Capacity Metrics Broken
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Each part of scripts/capacity-metrics.sh reports 1 when it passed.
+              # The parts of a stopped container do not run: Container Down covers it.
+              expr: min by (part) (capacity_metrics_parse_ok)
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+              refId: C
+        for: 15m
+        annotations:
+          summary: "Part {{ .Labels.part }} of the capacity metrics fails"
+          affected: "Monitoring only. The capacity alerts of that part are blind."
+          first_step: "Run bash /opt/monero-node/scripts/capacity-metrics.sh by hand to see the error."
+          description: "A part fails when a tool or a file that it reads is missing. The other parts still run. See Capacity Metrics Stale in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-digest-missing
+        title: Capacity Digest Missing
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Days since the last weekly digest. Before the first digest, days
+              # since the start of the prometheus container.
+              expr: >-
+                ((time() - max(capacity_report_last_success_timestamp_seconds)) or (time() - max(capacity_container_start_time_seconds{container="prometheus"}))) / 86400
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [8]
+              refId: C
+        for: 1h
+        annotations:
+          summary: 'No weekly capacity digest for {{ printf "%.0f" .Values.B.Value }} days'
+          affected: "Monitoring only. The digest is also the weekly proof that Telegram works."
+          first_step: "Run python3 /opt/monero-node/scripts/capacity-report.py --dry-run."
+          description: "The digest runs from /etc/cron.d/monero-node-capacity on Monday at 13:00 UTC. Check the cron entry, and check that TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID exist in /opt/monero-node/.env. Keep their values out of logs. See Capacity Digest Missing in docs/capacity.md."
+        labels:
+          severity: warning
+
+  # Group 2: use of the host and the containers
+  - orgId: 1
+    name: capacity-use-alerts
+    folder: alerts
+    interval: 1m
+    rules:
+      - uid: alert-egress-rate
+        title: Egress Rate High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Bits per second out of the host. 50 Mbit/s is a pace of 16 TB per month.
+              expr: max(rate(capacity_host_network_bytes_total{direction="tx"}[30m])) * 8
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [50000000]
+              refId: C
+        for: 30m
+        annotations:
+          summary: "The host sends {{ humanize .Values.B.Value }}bit/s"
+          affected: "Nobody yet. At this pace the month uses far more than the included traffic."
+          first_step: "Split the egress by container in Grafana with capacity_netns_network_bytes_total."
+          description: "P2P peaks come from peers that sync from this node. RPC peaks come from wallet restores. For one client, look for Public IP At RPC Cap. For P2P, consider --limit-rate-up. See Egress Rate High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-monerod-cpu
+        title: monerod CPU High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                max(rate(capacity_cgroup_cpu_usage_seconds_total{container="monerod"}[10m])) / max(capacity_cgroup_cpu_limit_cores{container="monerod"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.7]
+              refId: C
+        for: 30m
+        annotations:
+          summary: "monerod uses {{ humanizePercentage .Values.B.Value }} of its CPU limit"
+          affected: "Clearnet RPC users and onion users when the RPC slows."
+          first_step: "Run docker stats --no-stream monerod. Then look at RPC Busy and the P2P peers in Grafana."
+          description: "A resync or many syncing peers can cause this. Raise cpus in docker-compose.yml (the host has 4 vCPU) or add a node. See monerod CPU High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-monerod-throttled
+        title: monerod CPU Throttled
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                max(rate(capacity_cgroup_cpu_throttled_periods_total{container="monerod"}[10m])) / max(rate(capacity_cgroup_cpu_periods_total{container="monerod"}[10m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.1]
+              refId: C
+        for: 15m
+        annotations:
+          summary: "The CPU limit throttles monerod in {{ humanizePercentage .Values.B.Value }} of the periods"
+          affected: "Clearnet RPC users and onion users. Short bursts of RPC work wait."
+          first_step: "Run docker stats --no-stream monerod. Then look at RPC Busy and the P2P peers in Grafana."
+          description: "Raise cpus in docker-compose.yml (the host has 4 vCPU) or add a node. See monerod CPU High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-monerod-memory
+        title: monerod Memory High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Anonymous memory only. The LMDB page cache is file memory and frees itself.
+              expr: >-
+                max(capacity_cgroup_memory_anon_bytes{container="monerod"}) / max(capacity_cgroup_memory_limit_bytes{container="monerod"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.75]
+              refId: C
+        for: 15m
+        annotations:
+          summary: "monerod anonymous memory is {{ humanizePercentage .Values.B.Value }} of its limit"
+          affected: "Nobody yet. At the limit the kernel kills monerod, and all wallets drop for 1 to 2 minutes."
+          first_step: "Watch capacity_cgroup_memory_anon_bytes in Grafana for an hour."
+          description: "Raise mem_limit in docker-compose.yml before an OOM kill. The host has about 7.75 GB. See monerod Memory High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-monerod-fds
+        title: monerod File Descriptors High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                max(capacity_process_open_fds{container="monerod"}) / max(capacity_process_fd_soft_limit{container="monerod"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.7]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "monerod uses {{ humanizePercentage .Values.B.Value }} of its open-file limit"
+          affected: "Nobody yet. At the limit monerod cannot accept connections."
+          first_step: "Run grep -E '^capacity_process_(open_fds|fd_soft_limit)' /var/lib/node-exporter/textfile/capacity.prom."
+          description: "Add ulimits nofile for monerod in docker-compose.yml. That needs a monerod restart. See monerod File Descriptors High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-monerod-pids
+        title: monerod Threads High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                max(capacity_cgroup_pids{container="monerod"}) / max(capacity_cgroup_pids_limit{container="monerod"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+              refId: C
+        for: 10m
+        annotations:
+          summary: "monerod uses {{ humanizePercentage .Values.B.Value }} of its pids limit"
+          affected: "Nobody yet. At the limit monerod cannot start threads."
+          first_step: "Run grep -E '^capacity_(cgroup_pids|process_threads)' /var/lib/node-exporter/textfile/capacity.prom."
+          description: "Raise pids_limit for monerod in docker-compose.yml. That needs a monerod restart. See monerod File Descriptors High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-rpc-close-wait
+        title: RPC Sockets Stuck
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # The client closed these sockets, and monerod still holds them
+              expr: max by (server) (capacity_rpc_sockets{state="close-wait"})
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [10]
+              refId: C
+        for: 30m
+        annotations:
+          summary: '{{ printf "%.0f" .Values.B.Value }} sockets of the {{ .Labels.server }} RPC wait in CLOSE-WAIT'
+          affected: "Maybe clearnet RPC users and onion users. The stuck sockets count against the limits."
+          first_step: "Note the count and the time since the last monerod restart. When the count grows, restart monerod at a quiet hour: docker compose restart monerod."
+          description: "This can be the per-IP count leak in a form that we can see. Add the data to the upstream bug report. See RPC Sockets Stuck in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-disk-30d
+        title: Disk Fills Within 30 Days
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # Free part of each disk filesystem in 30 days at the trend of the last 7 days
+              expr: >-
+                predict_linear(node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}[7d], 30 * 86400) / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"}
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.15]
+              refId: C
+        for: 1h
+        annotations:
+          summary: "{{ .Labels.mountpoint }} passes 85% used within 30 days at the trend of the last 7 days"
+          affected: "Nobody yet"
+          first_step: "Run docker system df and du -sh /var/lib/docker/volumes/*."
+          description: "Plan more disk: a larger server type or a Hetzner volume for the chain. FCMP++ (about March 2027) will make the chain grow faster. See Disk Fills Within 30 Days in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-tor-cpu
+        title: Tor CPU High
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # CPU cores. Tor does most of its work on one core.
+              expr: max(rate(capacity_cgroup_cpu_usage_seconds_total{container="tor"}[10m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.7]
+              refId: C
+        for: 30m
+        annotations:
+          summary: 'Tor uses {{ printf "%.2f" .Values.B.Value }} CPU cores'
+          affected: "Onion users. Onion connections slow down."
+          first_step: "In Grafana look at tor_hs_intro_num_total and tor_hs_intro_rejected_intro_req_count for an introduction flood."
+          description: "For a flood, consider HiddenServicePoWDefensesEnabled 1 in the Tor config. See Tor CPU High in docs/capacity.md."
+        labels:
+          severity: warning
+
+      - uid: alert-onion-proxy-drops
+        title: Onion Proxy Dropping Connections
+        condition: C
+        noDataState: OK
+        execErrState: KeepLast
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              # nginx accepted connections that it could not handle
+              expr: >-
+                max(increase(capacity_onion_proxy_accepts_total[15m])) - max(increase(capacity_onion_proxy_handled_total[15m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.5]
+              refId: C
+        for: 0s
+        annotations:
+          summary: 'The onion-proxy dropped {{ printf "%.0f" .Values.B.Value }} connections in 15 minutes'
+          affected: "Onion users"
+          first_step: "Run docker logs --tail 50 onion-proxy and look for worker_connections."
+          description: "worker_connections is used up. Raise worker_connections in onion-proxy.conf, and add worker_rlimit_nofile plus ulimits in docker-compose.yml. See Onion Proxy Dropping Connections in docs/capacity.md."
+        labels:
+          severity: warning
