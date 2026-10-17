@@ -123,7 +123,7 @@ services:
     restart: unless-stopped
     user: "104:107"
     read_only: true
-    entrypoint: ["/usr/bin/tor"]
+    entrypoint: ["tor"]  # PATH lookup: /usr/local/bin on amd64, /usr/bin on arm64
     command:
       # No torrc file. Every option is a flag below.
       - --ignore-missing-torrc
@@ -266,7 +266,7 @@ services:
     restart: unless-stopped
     user: "104:107"
     read_only: true
-    entrypoint: ["/usr/bin/tor"]
+    entrypoint: ["tor"]  # PATH lookup: /usr/local/bin on amd64, /usr/bin on arm64
     command:
       # No torrc file. Every option is a flag below.
       - --ignore-missing-torrc
