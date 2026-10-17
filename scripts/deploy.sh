@@ -17,7 +17,7 @@
 #   0  deployed, and the gate passed
 #   1  failed, rolled back, and the previous commit passed the gate
 #   2  failed, and the rollback failed too. The box needs a person now.
-#   3  stopped before any change (lock, wrong box, onion key, backup, fetch)
+#   3  stopped before any change (lock, wrong box, onion key, backup, fetch, bad --run-dir)
 #   4  (follow) no deploy started in --run-dir
 #
 # The tor-keys volume is only read, by a throwaway read-only container.
@@ -39,6 +39,7 @@ HTTP_HOST=${HTTP_HOST:-localhost}       # where the published ports answer
 TOR_LOG_GRACE=${TOR_LOG_GRACE:-21600}   # tor up longer than this may have rotated out its bootstrap line
 
 TOR_USER=104:107                        # owns the onion keys on the boxes
+RUN_ID='^([0-9]+|local)-[0-9]+$'        # run dir names: <workflow run id>-<attempt>, or local-<n>
 STATUS_OK='"status"[[:space:]]*:[[:space:]]*"OK"'
 SELF=$(readlink -f "${BASH_SOURCE[0]}")
 
@@ -105,7 +106,17 @@ parse_args() {
 need_target() { [[ $TARGET =~ ^[0-9a-f]{40}$ ]] || die 3 "--target must be a full 40 character commit sha"; }
 need_domain() { [[ $DOMAIN =~ ^[a-z0-9.-]+$ ]] || die 3 "--domain is missing or not a host name"; }
 need_onion() { [[ $ONION =~ ^[a-z2-7]{56}\.onion$ ]] || die 3 "--onion is missing or not a v3 onion name"; }
-need_run_dir() { [[ $RUN_DIR == /* ]] || die 3 "--run-dir must be an absolute path"; }
+# --run-dir must be $STATE_DIR/runs/<run id>, as deploy-ssh.sh makes it, with
+# no symlink, no "." and no ".." in it. prune_runs deletes the old dirs next
+# to it, so any other path could delete dirs that are not runs.
+need_run_dir() {
+    local runs real
+    runs=$(realpath -m "$STATE_DIR/runs")
+    real=$(realpath -m -- "$RUN_DIR" 2>/dev/null) || real=""
+    if [[ -z $RUN_DIR || $RUN_DIR != "$real" || ${real%/*} != "$runs" || ! ${real##*/} =~ $RUN_ID ]]; then
+        die 3 "--run-dir must be $runs/<run id> (like 1234-1 or local-1), with no symlink in it"
+    fi
+}
 
 # ---------------------------------------------------------------- compose
 
@@ -555,6 +566,7 @@ cmd_deploy() {
     need_domain
     need_onion
     if [[ -n $RUN_DIR ]]; then
+        need_run_dir
         echo "$$" >"$RUN_DIR/pid"
         trap 'echo "$?" >"$RUN_DIR/status.tmp" && mv "$RUN_DIR/status.tmp" "$RUN_DIR/status"' EXIT
     fi
@@ -620,14 +632,19 @@ cmd_follow() {
     exit "$(<"$RUN_DIR/status")"
 }
 
-# Keep the newest RUNS_KEEP run dirs next to this one
+# Keeps this run dir and the newest RUNS_KEEP - 1 others. need_run_dir
+# checked that RUN_DIR is in $STATE_DIR/runs. Only dirs there with a run id
+# name can go. "find -type d" skips symlinks.
 prune_runs() {
-    local parent
-    local -a dirs
-    parent=$(dirname "$RUN_DIR")
-    mapfile -t dirs < <(find "$parent" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | cut -d ' ' -f 2-)
-    if ((${#dirs[@]} > RUNS_KEEP)); then
-        rm -rf -- "${dirs[@]:RUNS_KEEP}"
+    local dir
+    local -a old=()
+    while IFS= read -r dir; do
+        if [[ $dir != "$RUN_DIR" && ${dir##*/} =~ $RUN_ID ]]; then
+            old+=("$dir")
+        fi
+    done < <(find "${RUN_DIR%/*}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | cut -d ' ' -f 2-)
+    if ((${#old[@]} >= RUNS_KEEP)); then
+        rm -rf -- "${old[@]:RUNS_KEEP-1}"
     fi
 }
 

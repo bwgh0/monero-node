@@ -62,17 +62,24 @@ deploy_env=(
     WAIT_TIMEOUT=240 GATE_TIMEOUT=240 STABLE_SECONDS=15
 )
 
-# deploy <command> <sha> [onion]: runs deploy.sh as the workflow does. Sets rc.
+runs=$work/state/runs
+run_n=0
+extra_env=() # more env for the next deploy only
+
+# deploy <command> <sha> [onion]: runs deploy.sh as the workflow does, and
+# keeps its output in $work/last.log. Sets rc.
 deploy() {
-    local -a extra=()
+    local -a args=()
     if [[ $1 == start ]]; then
-        extra=(--run-dir "$work/state/runs/sim-$2")
+        run_n=$((run_n + 1))
+        args=(--run-dir "$runs/local-$run_n")
     fi
     set +e
-    env "${deploy_env[@]}" bash "$root/scripts/deploy.sh" "$1" "${extra[@]}" \
-        --target "$2" --domain "$domain" --onion "${3:-$onion}" 2>&1 | sed -u 's/^/  box| /'
+    env "${deploy_env[@]}" "${extra_env[@]}" bash "$root/scripts/deploy.sh" "$1" "${args[@]}" \
+        --target "$2" --domain "$domain" --onion "${3:-$onion}" 2>&1 | sed -u 's/^/  box| /' | tee "$work/last.log"
     rc=${PIPESTATUS[0]}
     set -e
+    extra_env=()
 }
 
 ids() {
@@ -176,10 +183,37 @@ want_all_running
 [[ $(ids) == "$before" ]] || bad "a container changed after a failed pull"
 record "F missing image: pull failed, rolled back, no container changed"
 
+step "case K: start refuses a bad --run-dir, and it deletes nothing"
+t0=$SECONDS
+# Old run dirs, a dir that is not a run, and a symlink to a dir of decoys.
+# The decoys have run id names, so only the --run-dir check keeps them.
+decoy=$work/decoy
+mkdir -p "$decoy"/{1-1,2-1,3-1} "$runs"/{5-1,6-1,7-1,keep-me}
+touch "$decoy/file"
+touch -d 2026-01-05 "$runs/5-1"
+touch -d 2026-01-06 "$runs/6-1"
+touch -d 2026-01-07 "$runs/7-1"
+ln -s "$decoy" "$runs/900-1"
+listing() { find "$decoy" "$runs" /var/lib -maxdepth 1 | sort; }
+listed=$(listing)
+for run_dir in /var/lib/x "$runs/900-1" "$runs/../../decoy/4-1" "$runs/not-a-run" "$runs/" runs/8-1; do
+    set +e
+    env "${deploy_env[@]}" RUNS_KEEP=1 bash "$root/scripts/deploy.sh" start --run-dir "$run_dir" \
+        --target "$base" --domain "$domain" --onion "$onion" >"$work/last.log" 2>&1
+    rc=$?
+    set -e
+    want_rc 3
+    grep -q -- '--run-dir must be' "$work/last.log" || bad "no clear error for --run-dir $run_dir"
+done
+[[ $(listing) == "$listed" ]] || bad "a refused --run-dir changed files"
+[[ ! -e /var/lib/x && ! -e $decoy/1-1/pid ]] || bad "a refused --run-dir got a deploy"
+record "K bad --run-dir (/var/lib/x, a symlink, .., a bad name, relative): refused with exit 3, nothing deleted"
+
 step "case D: a good change to prometheus.yml (run detached, as the workflow does)"
 t0=$SECONDS
 before=$(ids)
 sha=$(change "a good prometheus.yml change" sh -c 'printf "# a harmless change\n" >> monitoring/prometheus.yml')
+extra_env=(RUNS_KEEP=2)
 deploy start "$sha"
 want_rc 0
 want_head "$sha"
@@ -188,7 +222,12 @@ want_same_onion
 want_monerod_untouched
 changed=$({ diff <(printf '%s\n' "$before") <(ids) || true; } | awk '/^>/ { print $2 }' | sort -u | paste -sd ' ' -)
 [[ $changed == prometheus ]] || bad "the deploy recreated: ${changed:-nothing}, expected only prometheus"
-record "D good prometheus.yml change: deployed, recreated only prometheus"
+# RUNS_KEEP=2: this run and the newest old run stay. Other names stay too.
+[[ -d $runs/local-1 && -d $runs/7-1 && -d $runs/keep-me && -L $runs/900-1 ]] || bad "prune removed a dir that it must keep"
+[[ ! -e $runs/5-1 && ! -e $runs/6-1 ]] || bad "prune kept the old run dirs 5-1 and 6-1"
+[[ $(find "$decoy" | sort | paste -sd ' ' -) == "$decoy $decoy/1-1 $decoy/2-1 $decoy/3-1 $decoy/file" ]] ||
+    bad "prune changed the dir behind the symlink"
+record "D good prometheus.yml change: deployed, recreated only prometheus; prune kept 2 runs, other dirs and the symlink"
 
 step "case E: the onion pin does not match the box"
 t0=$SECONDS
