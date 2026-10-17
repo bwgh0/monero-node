@@ -72,12 +72,45 @@ on_err() {
     fail "step failed (exit $rc) in $func, line $line: ${src:-$cmd}"
 }
 
-# Deploy logs are public on GitHub. Mask IPs in any container output we
-# print, and indent it, so no line can start a workflow command.
+# Deploy logs are public on GitHub. quote_log hides secrets and IPs in the
+# container output that a deploy prints: each value in .env (4 or more
+# characters), Telegram bot tokens (also the "bot<token>" form in URLs),
+# and IPv4 and IPv6 addresses. It also indents each line, so no line can
+# start a workflow command.
 quote_log() {
-    sed -E -e 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g' \
-        -e 's/([0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}/x:x::x/g' \
-        -e 's/^/    | /'
+    python3 -c '
+import re, sys
+
+secrets = []
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as env:
+        for line in env:
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            value = line.split("=", 1)[1].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"\x27":
+                value = value[1:-1]
+            if len(value) >= 4:
+                secrets.append(value)
+except OSError:
+    pass
+secrets.sort(key=len, reverse=True)
+masks = [
+    (re.compile(r"[0-9]{6,12}:[A-Za-z0-9_-]{30,}"), "[bot token]"),
+    (re.compile(r"([0-9]{1,3}\.){3}[0-9]{1,3}"), "x.x.x.x"),
+    (re.compile(r"([0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}"), "x:x::x"),
+]
+for raw in sys.stdin.buffer:
+    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+    for secret in secrets:
+        line = line.replace(secret, "[secret]")
+    for pattern, mask in masks:
+        line = pattern.sub(mask, line)
+    sys.stdout.write("    | " + line + "\n")
+' "$REPO_DIR/.env"
 }
 
 usage() {

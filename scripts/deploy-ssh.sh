@@ -14,6 +14,12 @@ host=$1 domain=$2 onion=$3 commit=$4
 [[ $onion =~ ^[a-z2-7]{56}\.onion$ ]] || { echo "::error::bad onion name"; exit 3; }
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad commit sha"; exit 3; }
 : "${SSH_KEY:?SSH_KEY is empty. Is the secret set?}"
+# GitHub hides a secret as a whole. A key has many lines, so hide each line too.
+if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    while IFS= read -r line; do
+        if [[ -n $line ]]; then echo "::add-mask::$line"; fi
+    done <<<"$SSH_KEY"
+fi
 known_hosts=$(readlink -f "${KNOWN_HOSTS:-.github/known_hosts}")
 run_dir=/var/lib/monero-node-deploy/runs/${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}
 remote=$run_dir/deploy.sh
