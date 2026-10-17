@@ -1,16 +1,16 @@
 # Monitoring
 
 This page tells who watches the boxes, which box sends which alert, what the
-messages look like, and how the GitHub watchdog and Dependabot work.
+messages look like, and how the GitHub watchdog, its clock and Dependabot work.
 [capacity.md](capacity.md) has the limits, the capacity alerts and their runbooks.
 
 ## Who watches what
 
 | Watcher | Runs on | Watches | Sends |
 |---|---|---|---|
-| Prometheus and Grafana | each box | its own services, and the RPC, onion, cert and Grafana of the other box | Telegram, through the contact point of the box |
+| Prometheus and Grafana | each box | its own services, the RPC, onion, cert and Grafana of the other box, and the watchdog runs | Telegram, through the contact point of the box |
 | Weekly digest | each box (cron, Monday 13:00 UTC) | the capacity numbers of the box | one Telegram message per box per week |
-| Watchdog | GitHub Actions, every 10 minutes | both boxes from outside | Telegram, only for what the boxes cannot send |
+| Watchdog | GitHub Actions, every 10 minutes, started by an AWS EventBridge rule | both boxes from outside | Telegram, only for what the boxes cannot send |
 
 Each box probes both boxes (monitoring/prometheus.yml). Every probe series has
 a `node` label (us, eu) and a `domain` label. `deploy.sh render` writes the
@@ -18,24 +18,26 @@ domain of the box into the rule files, so each box knows which probes are its ow
 
 ## Routing: one message per incident
 
-Each box alerts only about its own services. Two rules look at the other box:
+Each box alerts only about its own services. Two rules look at the other box,
+and one rule looks at the watchdog:
 
 | Rule | Sent by | Fires when |
 |---|---|---|
 | Grafana Unreachable | the other box | the Grafana of a box did not answer for 10 minutes. This is the dead-man check: a box with no Grafana sends no alerts. The message tells if the RPC and the onion of that box answer. |
 | Peer RPC Refused | the other box | the RPC of a box refused every probe from the other box for 15 minutes, while the Grafana and the onion of that box answer. This is the canary for the per-IP cap (see Public IP At RPC Cap in capacity.md). |
+| Watchdog Silent | the US box, and the EU box only while the Grafana of the US box fails | no watchdog run passed for 40 minutes. See [Watchdog Silent](#watchdog-silent). |
 
 All other rules are about the box that sends them:
 
 | File | Rules |
 |---|---|
 | rules.yml | Node Down, Node Falling Behind, Node Height Stale, Node Not Synchronized, P2P Peers Low, Monero Exporter Blind, System Exporter Down, Scrape Target Down, CPU Usage High, RAM Usage High, Disk Usage Warning, Disk Usage Critical, Disk Fills Within 14 Days, Disk Almost Full, Prometheus Unreachable |
-| probe-rules.yml | RPC Endpoint Down, RPC Slow, TLS Cert Expiring, Onion Down, Onion TLS Down (plus the two rules above) |
+| probe-rules.yml | RPC Endpoint Down, RPC Slow, TLS Cert Expiring, Onion Down, Onion TLS Down (plus the three rules above) |
 | container-rules.yml | Container Down, Container Crashed, Container Unhealthy, Container Metrics Stale |
 | capacity-rules.yml | the capacity rules (see capacity.md) |
 
 When both boxes are down at the same time, neither box can send. Then the
-watchdog sends the alert.
+watchdog sends the alert. When the watchdog stops, the boxes send Watchdog Silent.
 
 ### Quiet rules
 
@@ -49,8 +51,8 @@ Some rules stay quiet while a rule with the same cause fires:
 - Onion TLS Down stays quiet while the plain onion probe fails. Onion Down covers it.
 - Peer RPC Refused stays quiet while the Grafana or the onion of the other box
   fails. Grafana Unreachable or the alerts of that box cover it.
-- Container Metrics Stale and Capacity Metrics Stale stay quiet while
-  node-exporter is down. System Exporter Down covers it.
+- Container Metrics Stale, Capacity Metrics Stale and Watchdog Silent stay
+  quiet while node-exporter is down. System Exporter Down covers it.
 
 ### Duplicates that can still occur
 
@@ -58,6 +60,9 @@ These cases send 2 messages for one cause. They are rare, and each message is tr
 
 - A wrong or expired cert: the box sends RPC Endpoint Down, and the other box
   sends Peer RPC Refused.
+- Watchdog Silent while the probe from EU to the US Grafana fails, but the US
+  box can still send (for example a network fault between the boxes): both
+  boxes send it.
 - nginx down on a box: Grafana sits behind nginx on port 80, so the other box
   sends Grafana Unreachable while the box itself still alerts. After 30
   minutes the watchdog also sends.
@@ -165,8 +170,9 @@ Known limits:
 
 ## The watchdog
 
-`.github/workflows/watchdog.yml` runs `scripts/watchdog.py` every 10 minutes
-(at 3, 13, 23 and so on past the hour, away from the busy start of the hour).
+`.github/workflows/watchdog.yml` runs `scripts/watchdog.py`. An AWS
+EventBridge rule starts it every 10 minutes with a workflow_dispatch event
+(see [The clock](#the-clock)).
 
 ### Checks
 
@@ -227,20 +233,110 @@ The repo is public, so the run logs are public. The watchdog prints only the
 check ids, the status and short error names (timeout, HTTP 503). It prints no
 IPs, no URLs, no onion names, no tokens and no chat ID.
 
-### Keepalive
+### The clock
 
-GitHub turns off the schedules of a public repo after 60 days with no commit.
-The keepalive job of the workflow runs every Monday at 07:41 UTC and turns the
-workflow on again through the API, which starts the 60 days again. More ways
-back, when the schedule stops anyway:
+GitHub started 0 scheduled runs of the watchdog in its first hours on main,
+with 2 cron forms. Community reports since 2026-08-26 tell of scheduled runs
+that GitHub drops or starts hours late
+(github.com/orgs/community/discussions/207346). A workflow_dispatch event
+starts a run at once. So the workflow has no schedule, and a clock outside
+GitHub sends the event.
 
-- Any push to the repo starts the 60 days again.
-- GitHub sends an email before it turns off a schedule.
-- `gh workflow enable watchdog.yml` turns it on again.
+The clock is in the AWS account of Monero One, in us-east-1. All its parts
+have the name `monero-node-watchdog-clock`:
+
+| Part | What it does |
+|---|---|
+| EventBridge rule | `rate(10 minutes)` on the default event bus. Its target sends the body `{"ref":"main"}` with the headers `Accept: application/vnd.github+json` and `X-GitHub-Api-Version: 2022-11-28`. A failed call gets 2 more tries in 5 minutes. |
+| API destination | POST to `https://api.github.com/repos/bwgh0/monero-node/actions/workflows/watchdog.yml/dispatches`. GitHub answers 204. |
+| Connection | API key auth: the header `Authorization: Bearer <token>`. EventBridge keeps the token in Secrets Manager. |
+| IAM role | events.amazonaws.com can assume it. Its only permission is `events:InvokeApiDestination` on that API destination. |
+
+The token is a fine-grained GitHub token for bwgh0/monero-node only, with the
+permission Actions: read and write. A copy is in the macOS Keychain of the
+laptop (service `monero-node-watchdog-clock`, account `github`).
+`scripts/watchdog-clock.sh` reads it into a mode-600 temp file for the AWS
+CLI and deletes the file after the call. The script never prints the token.
+
+GitHub turns off a workflow after 60 days with no commit only when the
+workflow has a schedule. This workflow has none, so it needs no keepalive.
+
+#### Set up the clock again
+
+1. On GitHub, make a fine-grained token (Settings, Developer settings,
+   Fine-grained tokens): resource owner bwgh0, only the repository
+   monero-node, repository permission Actions: Read and write. Give it an
+   expiry date, and put a reminder before that date in the calendar.
+2. Put the token in the Keychain. The command asks for the token, so the
+   token stays out of the command line and the shell history:
+   `security add-generic-password -U -s monero-node-watchdog-clock -a github -w`
+3. `scripts/watchdog-clock.sh --dry-run apply` prints the AWS calls and the
+   JSON files they get. Read them.
+4. `scripts/watchdog-clock.sh apply` creates the parts. You can run it again
+   at any time: it creates what is missing and updates the rest. It keeps the
+   token of a connection that exists.
+5. After 10 to 20 minutes, `scripts/watchdog-clock.sh status` must show the
+   connection AUTHORIZED, invocations with 0 failed invocations, and a new
+   workflow_dispatch run that passed.
+
+The script uses the AWS CLI profile `default` (WATCHDOG_CLOCK_PROFILE sets a
+different one) and prints the account ID first. `scripts/watchdog-clock.sh
+delete` removes all the parts. It asks first.
+
+#### Rotate the token
+
+1. Make a new token (step 1 above).
+2. Run `security add-generic-password -U -s monero-node-watchdog-clock -a github -w`.
+   With -U, it replaces the token in the Keychain.
+3. `scripts/watchdog-clock.sh rotate-token` gives the connection the new token.
+4. After 10 minutes, `scripts/watchdog-clock.sh status` must show a new
+   workflow_dispatch run that passed. Then delete the old token on GitHub.
+
+When the token expires or GitHub revokes it, GitHub answers 401. EventBridge
+then sets the connection to DEAUTHORIZED and stops the dispatches. After 40
+minutes, the boxes send Watchdog Silent. rotate-token makes the connection
+AUTHORIZED again.
+
+### Watchdog Silent
+
+A watchdog that stops sends nothing. So the boxes watch the watchdog. Every
+5 minutes, cron on each box runs `scripts/watchdog-metrics.py`
+(`/etc/cron.d/monero-node-watchdog-metrics`). It asks the public GitHub API
+for the newest run of watchdog.yml on main that passed, and writes the result
+for the node-exporter textfile collector (`watchdog.prom`). It uses no token.
+GitHub allows 60 such calls per hour from one IP, and the script makes 12.
+The deploy runs the script once, so the metrics are there when Grafana loads
+the rule.
+
+| Metric | Value |
+|---|---|
+| `watchdog_last_success_timestamp_seconds` | The end of the newest good run. It only moves forward. When the API call fails, the last value stays. Before the first API call that works, it is the time of the first try. |
+| `watchdog_github_api_ok` | 1 when the last API call worked, else 0 |
+| `watchdog_github_api_last_ok_timestamp_seconds` | when an API call last worked |
+| `watchdog_metrics_last_run_timestamp_seconds` | when the script last wrote the file |
+
+Watchdog Silent (probe-rules.yml, critical) fires when no good run ended in
+the last 40 minutes. With a run every 10 minutes, that is about 3 runs that
+did not start or did not pass. When the file is missing, the rule counts from
+the start of Prometheus, so a box with no file also alerts after 40 minutes.
+The message tells the cause:
+
+| Summary | Cause | First step |
+|---|---|---|
+| No watchdog run passed for N minutes | The clock stopped (for example an expired token or a DEAUTHORIZED connection), GitHub started no runs, or the runs fail. | `gh run list --workflow watchdog.yml`, and on the laptop `scripts/watchdog-clock.sh status` |
+| The GitHub API call of this box fails | The box cannot see the runs, for example because of the rate limit of its IP. The watchdog can be fine. | On the box, `python3 /opt/monero-node/scripts/watchdog-metrics.py` prints the result of the call. |
+| The watchdog metrics of this box are N minutes old, or This box has no watchdog metrics | The cron job does not run. | Check `/etc/cron.d/monero-node-watchdog-metrics`, then run the script by hand. |
+
+One box sends it. The US box always sends it. The EU box sends it only when
+its probe of the US Grafana failed for all of the last 10 minutes, so the
+alert also comes when the US box is down. When the EU box has no probe data
+of the US Grafana, it sends it too. Watchdog Silent stays quiet while
+node-exporter is down (System Exporter Down covers it). When both boxes and
+the watchdog stop at the same time, no message goes out.
 
 ### Run it by hand
 
-- On GitHub: `gh workflow run watchdog.yml`. This also runs the keepalive.
+- On GitHub: `gh workflow run watchdog.yml`.
 - Locally: `python3 scripts/watchdog.py --state /tmp/watchdog.json --dry-run`
   prints the message and sends nothing. The onion checks need a Tor SOCKS
   proxy on 127.0.0.1:9050, else they fail.
