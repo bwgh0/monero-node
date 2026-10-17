@@ -366,19 +366,20 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "id": 11,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Network Traffic",
+      "title": "P2P Traffic",
+      "description": "P2P bytes from get_net_stats. RPC traffic to wallets is not in this panel: see Network Bandwidth in the System dashboard.",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
           "expr": "rate(monero_net_rx_bytes[5m])",
-          "legendFormat": "RX",
+          "legendFormat": "P2P RX",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
           "expr": "rate(monero_net_tx_bytes[5m])",
-          "legendFormat": "TX",
+          "legendFormat": "P2P TX",
           "refId": "B"
         }
       ]

@@ -504,19 +504,26 @@
       "id": 40,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "title": "Network Bandwidth",
+      "description": "Host interface and the public network of each container, from scripts/capacity-metrics.sh. node-exporter sees only its own network namespace, so it cannot give these.",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "rate(node_network_receive_bytes_total{device!~\"lo|docker.*|br-.*|veth.*\"}[5m]) * 8",
+          "expr": "rate(capacity_host_network_bytes_total{direction=\"rx\"}[5m]) * 8",
           "legendFormat": "RX {{device}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|br-.*|veth.*\"}[5m]) * 8",
+          "expr": "rate(capacity_host_network_bytes_total{direction=\"tx\"}[5m]) * 8",
           "legendFormat": "TX {{device}}",
           "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum by (container) (rate(capacity_netns_network_bytes_total{direction=\"tx\",network=\"public\"}[5m])) * 8",
+          "legendFormat": "TX {{container}}",
+          "refId": "C"
         }
       ]
     },
@@ -540,19 +547,26 @@
       "id": 41,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "title": "Network Connections",
+      "description": "Open TCP connections in the namespace of each container, new clearnet connections per second for each published port, and the sockets of the public RPC (limit: --rpc-max-connections). From scripts/capacity-metrics.sh.",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "node_netstat_Tcp_CurrEstab",
-          "legendFormat": "Established",
+          "expr": "capacity_netns_tcp_curr_estab",
+          "legendFormat": "Established {{container}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "rate(node_netstat_Tcp_ActiveOpens[5m])",
-          "legendFormat": "New connections/s",
+          "expr": "rate(capacity_new_connections_total[5m])",
+          "legendFormat": "New/s port {{port}}",
           "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum(capacity_rpc_connections{server=\"restricted\"})",
+          "legendFormat": "Public RPC sockets",
+          "refId": "C"
         }
       ]
     }
