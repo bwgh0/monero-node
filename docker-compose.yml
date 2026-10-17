@@ -231,7 +231,11 @@ services:
     volumes:
       - ./monitoring/rpc-proxy.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - monerod
+      monerod:
+        condition: service_started
+        # nginx resolves monerod once, at start, and a new monerod container
+        # can get a new IP. So compose restarts the proxy after monerod.
+        restart: true
     networks:
       - internal
     security_opt:
