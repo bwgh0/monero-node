@@ -1,8 +1,11 @@
 # A Linux shell with the docker CLI and compose v5.0.1 (the oldest compose on
 # the boxes), for running the ci/ scripts from a Mac. See ci/in-box.sh.
-FROM docker:29-cli AS docker
+# Both images are pinned by the digest of their multi-arch index. Dependabot
+# does not read this file, so change the tag and the digest together by hand.
+FROM docker:29.9.0-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00 AS docker
 
-FROM ubuntu:24.04
+# noble is Ubuntu 24.04
+FROM ubuntu:noble-20260917@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl git openssl python3 \
     && rm -rf /var/lib/apt/lists/*

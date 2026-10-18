@@ -13,7 +13,10 @@ image=monero-node-ci-box:local
 # A git worktree keeps its objects in the main checkout. Mount that too.
 common=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)
 
-# The box is native. It runs the stack images as amd64.
+# The box is native. It runs the stack images as amd64. With the classic
+# image store, a digest names one platform only: when docker says "cannot
+# overwrite digest", remove the local image of the other platform
+# (docker rmi <name>@<digest>).
 DOCKER_DEFAULT_PLATFORM='' docker build -q -t "$image" -f "$root/ci/box.Dockerfile" "$root/ci" >/dev/null
 exec docker run --rm --network host \
     -v /var/run/docker.sock:/var/run/docker.sock \

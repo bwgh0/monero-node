@@ -387,9 +387,12 @@ runs on each PR, and a merge to main deploys to both boxes.
 - Dependabot follows the version tag of an image. An image line with only a
   digest (monero-exporter) gets a PR to the digest of the latest tag, with no
   version number. Check such a PR by hand.
-- Each image line names the digest of its multi-arch index, and the lint job
-  (ci/lint.sh) fails on an image with no digest. scripts/setup.sh takes the
-  certbot image from docker-compose.yml.
+- Each image names the digest of its multi-arch index: the image lines of the
+  compose files, the FROM lines of ci/box.Dockerfile and the docker run
+  commands of ci/lint.sh. The lint job (ci/lint.sh) fails on an image with
+  no digest. Dependabot does not read ci/box.Dockerfile or ci/lint.sh, so
+  change those pins by hand. scripts/setup.sh takes the certbot image from
+  docker-compose.yml.
 - A new build of the same tag (nginx 1.30-alpine gets them often) comes in a
   PR that changes only the digest. Such a PR is never in a group.
 
