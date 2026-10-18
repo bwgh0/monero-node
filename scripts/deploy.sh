@@ -21,7 +21,7 @@
 #   gate    run only the checks: containers, HTTP, chain height, tor, onion
 #           name and key. Exit 0 when all pass, 1 at the first failure.
 #   render  fill the ${DOMAIN} and ${TELEGRAM_CHAT_ID} templates in the checkout
-#           (nginx.conf and the Grafana alerting files)
+#           (nginx.conf, onion-proxy.conf and the Grafana alerting files)
 #
 # Options: --target <full sha>, --domain <box name>, --onion <name>.onion,
 # --run-dir <dir> (start, follow), --key-sha256 <hex> (deploy, gate): the
@@ -413,8 +413,9 @@ backup_grafana_db() {
 render_templates() {
     local chat f cp=monitoring/grafana/provisioning/alerting/contactpoints.yml
     # The alert rules use the DOMAIN of this box to tell its own probes from
-    # those of the other box (see alerting/probe-rules.yml)
-    for f in nginx.conf monitoring/grafana/provisioning/alerting/*.yml; do
+    # those of the other box (see alerting/probe-rules.yml). onion-proxy.conf
+    # names the cert of this box.
+    for f in nginx.conf onion-proxy.conf monitoring/grafana/provisioning/alerting/*.yml; do
         if [[ -f $f ]]; then
             sed -i "s/\${DOMAIN}/$DOMAIN/g" "$f"
         fi

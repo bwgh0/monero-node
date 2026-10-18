@@ -181,8 +181,9 @@ services:
 
   onion-proxy:
     # Bridge between the onion and monerod. Plain HTTP and TLS clients both
-    # work. It reaches only the restricted RPC (monerod:18089). No host port.
-    # See onion-proxy.conf.
+    # work. nginx ends TLS with the cert of monerod, and all requests share
+    # one pool of sockets to the restricted RPC (monerod:18089). No host
+    # port. See onion-proxy.conf.
     image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
     container_name: onion-proxy
     restart: unless-stopped
@@ -190,12 +191,17 @@ services:
     tmpfs:
       - /tmp
       - /run
-      - /var/cache/nginx
+      # The replies that Tor still sends (proxy_store in onion-proxy.conf).
+      # The cap keeps a flood of slow clients from taking the RAM of the box.
+      - /var/cache/nginx:size=1g
     # A socket file left from the last run makes bind() fail, so remove it
     entrypoint: ["/bin/sh", "-c", "rm -f /run/onion/monerod.sock && exec nginx -g 'daemon off;'"]
     volumes:
       - ./onion-proxy.conf:/etc/nginx/nginx.conf:ro
       - onion-sock:/run/onion
+      # The Let's Encrypt cert for the TLS onion clients.
+      # scripts/cert-reload.sh reloads nginx after a renewal.
+      - certbot-conf:/etc/letsencrypt:ro
     depends_on:
       - monerod
     networks:

@@ -94,9 +94,10 @@ cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
 cp "${SCRIPT_DIR}/onion-proxy.conf" "${APP_DIR}/"
 cp -r "${SCRIPT_DIR}/monitoring" "${SCRIPT_DIR}/scripts" "${APP_DIR}/"
 
-# Substitute domain in nginx.conf and in the alert rules (they tell the
-# probes of this box from those of the other box by its domain)
-sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}"/monitoring/grafana/provisioning/alerting/*.yml
+# Substitute domain in nginx.conf, onion-proxy.conf (the cert path) and the
+# alert rules (they tell the probes of this box from those of the other box
+# by its domain)
+sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}/onion-proxy.conf" "${APP_DIR}"/monitoring/grafana/provisioning/alerting/*.yml
 
 # Generate initial Let's Encrypt cert (monerod loads it for native TLS). The
 # cert is in the certbot-conf volume, so look for it there. Let's Encrypt

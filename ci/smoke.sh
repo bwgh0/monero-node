@@ -57,12 +57,20 @@ ok "pulled $(docker compose config --images | sort -u | wc -l) images"
 step "fill the templates, as a deploy does"
 REPO_DIR=$repo bash scripts/deploy.sh render --domain "$domain"
 # shellcheck disable=SC2016 # the literal template text
-if grep -qF '${DOMAIN}' nginx.conf monitoring/grafana/provisioning/alerting/*.yml; then
-    bad "nginx.conf or an alert rule file still has \${DOMAIN}"
+if grep -qF '${DOMAIN}' nginx.conf onion-proxy.conf monitoring/grafana/provisioning/alerting/*.yml; then
+    bad "nginx.conf, onion-proxy.conf or an alert rule file still has \${DOMAIN}"
 fi
 grep -qF "domain=\"$domain\"" monitoring/grafana/provisioning/alerting/probe-rules.yml ||
     bad "the probe rules do not name $domain"
-ok "nginx.conf and the alert rules name $domain"
+grep -qF "/etc/letsencrypt/live/$domain/fullchain.pem" onion-proxy.conf ||
+    bad "onion-proxy.conf does not name the cert of $domain"
+ok "nginx.conf, onion-proxy.conf and the alert rules name $domain"
+
+# onion-proxy loads the cert at start, so nginx -t needs it too
+step "seed a self-signed cert and the onion key dir"
+seed_certs "$domain"
+seed_tor_dir
+ok "seeded"
 
 step "check the configs with the pinned images"
 check() {
@@ -79,11 +87,6 @@ check nginx onion-proxy -t -q
 # resolve it to load the config. Its check runs once the stack is up.
 check promtool prometheus check config /etc/prometheus/prometheus.yml
 check /bin/blackbox_exporter blackbox --config.file=/etc/blackbox_exporter/config.yml --config.check
-
-step "seed a self-signed cert and the onion key dir"
-seed_certs "$domain"
-seed_tor_dir
-ok "seeded"
 
 step "boot the stack"
 docker compose up -d --wait --wait-timeout 300
