@@ -7,15 +7,21 @@
 #
 # Each part writes capacity_metrics_parse_ok{part="..."}: 1 when it passed,
 # 0 when it failed. A failed part does not stop the other parts.
-# For tests: TEXTFILE_DIR, CAPACITY_STATE_DIR, CGROUP_ROOT and LOCK_FILE.
+# For tests: TEXTFILE_DIR, CAPACITY_STATE_DIR, CGROUP_ROOT, LOCK_FILE and ENV_FILE.
 set -uo pipefail
 
 DIR="${TEXTFILE_DIR:-/var/lib/node-exporter/textfile}"
 STATE_DIR="${CAPACITY_STATE_DIR:-/var/lib/monero-node-capacity}"
 CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+ENV_FILE="${ENV_FILE:-/opt/monero-node/.env}"
 # Outbound traffic included per month: 3 TiB for a cpx31 in ash (hcloud
-# server describe). Inbound traffic is free.
-INCLUDED_TRAFFIC_BYTES="${INCLUDED_TRAFFIC_BYTES:-3298534883328}"
+# server describe). Inbound traffic is free. INCLUDED_TRAFFIC_BYTES=<bytes>
+# in .env sets another amount. .env holds secrets, so only this key is read,
+# never the whole file. The last line of the key wins. Quotes are dropped,
+# and a value that is not all digits counts as unset.
+included=$(sed -n 's/^INCLUDED_TRAFFIC_BYTES=//p' "$ENV_FILE" 2>/dev/null | tail -n 1 | tr -d "\"'\r")
+[[ $included =~ ^[0-9]+$ ]] || included=3298534883328
+INCLUDED_TRAFFIC_BYTES="${INCLUDED_TRAFFIC_BYTES:-$included}"
 OUT="${DIR}/capacity.prom"
 CONTAINERS=(monerod onion-proxy tor nginx monerod-rpc-proxy monero-exporter blackbox tor-client prometheus grafana)
 # A hung dockerd must not hang the cron job: each docker call gets 10 s

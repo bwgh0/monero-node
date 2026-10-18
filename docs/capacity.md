@@ -210,8 +210,9 @@ locations (hcloud server describe).
 
 The included traffic is 3 TiB (3298534883328 bytes) unless you set it. That
 is the amount of a cpx31 in ash (hcloud server describe), the plan of both
-boxes. To change it, put `INCLUDED_TRAFFIC_BYTES=<bytes>` before `bash` in
-the first line of scripts/capacity.cron.
+boxes. To change it, add `INCLUDED_TRAFFIC_BYTES=<bytes>` (digits only) to
+the .env of the box. scripts/capacity-metrics.sh reads only this key of
+.env, at its next run.
 
 ### OOM Kill
 
