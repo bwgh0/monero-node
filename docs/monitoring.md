@@ -383,7 +383,6 @@ runs on each PR, and a merge to main deploys to both boxes.
 - The deploy refuses a monerod image change that ships with a change to
   another service. So merge a monerod PR alone, and wait for its deploy to
   finish before you merge the next PR.
-- The monerod bump to v0.18.5.x is a separate task. The owner decides it.
 - Dependabot follows the version tag of an image. An image line with only a
   digest (monero-exporter) gets a PR to the digest of the latest tag, with no
   version number. Check such a PR by hand.
