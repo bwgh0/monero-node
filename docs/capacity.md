@@ -13,14 +13,16 @@ Numbers from the capacity audit of October 2026, for one box.
 |---|---|---|---|---|---|
 | Sockets per public IP, restricted RPC | 10 (default 3) | `--rpc-max-connections-per-public-ip=10` | monerod accepts and closes the socket. wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. | 10 open wallets behind one IP, or 4 iOS unlocks at the same time (each unlock adds 2 sockets); shared VPN, carrier NAT or Tor exit IPs | max 1 |
 | Sockets in total, restricted RPC | 100 | default (`--rpc-max-connections`) | the same, for every new client | about 100 open wallets at one time. About 1,500 to 3,000 daily iOS users on the US box. 100 background-sync users fill it alone. | 1 to 2 |
-| Sockets per private IP (all Tor users share the onion-proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | every new Tor wallet fails | 50 open Tor wallets per node, about 400 to 500 daily Tor users | 0 |
+| Sockets per private IP (all Tor users share the onion-proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | every new Tor wallet fails | only through the count leak: the onion-proxy pool stays at 32 or less | 0 |
+| onion-proxy pool to monerod (plain and TLS onion clients) | 32 requests at monerod at a time (`max_conns`) | onion-proxy.conf | nginx answers each request above 32 at once with a 502 ("no live upstreams"), and monerod never sees it | 32 requests that wait for monerod's 2 RPC threads at the same time: a monerod that stalls, or far more onion load than Tor can carry. 60 parallel Tor clients used 6 sockets in the lab. | 1 to 2 |
+| onion-proxy reply store | 1 GiB tmpfs (`/var/cache/nginx`) | docker-compose.yml | nginx stops the reply in the middle ("No space left on device" in its log) | about 40 replies of 25 MB that Tor still sends at the same time | 0 |
 | RPC worker threads | 2 per server | fixed in the monerod build (`daemon/rpc.h`) | requests queue, and latency rises for all users | about 10 wallets that catch up at the same time | 2.6% of one thread |
 | Included traffic | 3 TiB outbound per month (cpx31 in ash, hcloud server describe). Inbound is free. | server plan | overage at $1.20 per TB (cost only) | about 3 times the egress of October 2026: about 5,000 more daily users, fewer with many restores | about 30% (about 1 TB per month) |
 | Disk | 150 GB filesystem | server type (CPX31) | monerod stops when the disk is full | 80% about mid-December 2026; 85% about May 2027 | 78% |
 | monerod CPU | 2 cores (cgroup) | compose `cpus: 2.0` | throttling, slow RPC | far | under 8% |
 | monerod memory | 4 GiB (cgroup) | compose `mem_limit: 4g` | OOM kill and restart | far | 334 MB anonymous |
 | monerod open files | 1024 soft | Docker default | accept fails | only after the socket caps go up | 111 |
-| onion-proxy | 2 workers x 1024 connections, 1024 open files | onion-proxy.conf | nginx drops connections | far (each Tor wallet uses 2 nginx connections) | about 2 |
+| onion-proxy | 1 worker x 4096 connections, 16384 open files | onion-proxy.conf | nginx drops connections | about 1,300 open Tor connections (each uses 3 nginx connections) | about 2 |
 | Request size, response soft limit | 1 MB, 25 MiB | monerod defaults | request refused, response cut | far | |
 
 Assumptions behind the user counts:
@@ -65,7 +67,7 @@ Canaries:
 | Kernel, monerod namespace | Server-side TIME-WAIT sockets pile up for one IP. A downgraded wallet makes about 6 failing plain-HTTP connections per minute. |
 | Wire | Plain HTTP (`POST /...`) arrives on 443 or 18089. |
 | Client log | wallet2: "SSL handshake failed on an autodetect connection, reconnecting without SSL". The app shows no sync. |
-| Onion plain path | nginx logs "peer closed connection in SSL handshake" and returns 502. |
+| Onion (plain and TLS) | nginx in onion-proxy logs "peer closed connection in SSL handshake" and returns 502. |
 | Probes | Peer RPC Refused, or Onion Down while the RPC passes. |
 
 ## Capacity alerts
@@ -129,14 +131,23 @@ refuses every new wallet, and that wallet stays broken until it reopens.
 
 ### Onion RPC Connections High, Onion RPC Connections Critical
 
-Tor wallets fill the private-IP cap of the onion-proxy IP.
+All onion requests, plain and TLS, go through one pool of sockets in
+onion-proxy (onion-proxy.conf). The pool holds at most 32 sockets
+(`max_conns`), 18 under the private-IP cap of 50. High fires above 25
+sockets, Critical at 30. With a full pool, nginx answers each new request at
+once with a 502, so some onion wallets fail to sync. A pool this full means
+that requests wait for monerod: its 2 RPC threads are busy, or it stalls.
 
-1. Compare `capacity_onion_socket_clients` and `tor_hs_rdv_established_count`
-   with the monerod count. A monerod count far above the onion clients means
-   pool sockets of the plain path or a client that reconnects.
-2. Raise `--rpc-max-connections-per-private-ip`. Keep it at or below
-   `--rpc-max-connections`, or monerod stops at start.
-3. When Onion Down fires while the counts look low, the leak holds the
+1. Check RPC Busy, monerod CPU and `docker logs --tail 50 monerod`. A slow
+   monerod fills the pool for all users, clearnet too.
+2. Compare `capacity_onion_socket_clients` and `tor_hs_rdv_established_count`
+   with the monerod count, to see how much onion load there is.
+3. To raise the pool, raise `max_conns` and `keepalive` in onion-proxy.conf
+   together, and raise `--rpc-max-connections-per-private-ip` so that the pool
+   stays well under it. Keep that cap at or below `--rpc-max-connections`, or
+   monerod stops at start. Move the alert thresholds in capacity-rules.yml with
+   the pool.
+4. When Onion Down fires while the counts look low, the leak holds the
    onion-proxy IP. Restart monerod at a quiet hour: `docker compose restart monerod`.
 
 ### Public IP At RPC Cap
@@ -293,8 +304,9 @@ Tor uses more than 0.7 core for 30 minutes. Tor does most work on one core.
 nginx in onion-proxy accepted connections that it could not handle:
 `worker_connections` is used up.
 
-1. Raise `worker_connections` in onion-proxy.conf, and add
-   `worker_rlimit_nofile` plus `ulimits` in docker-compose.yml.
+1. Raise `worker_connections` and `worker_rlimit_nofile` in onion-proxy.conf.
+   Each Tor connection uses 3 nginx connections, and each reply in the
+   reply store uses 1 more file.
 
 ## Capacity metrics
 

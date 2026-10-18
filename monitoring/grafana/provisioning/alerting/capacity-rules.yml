@@ -116,7 +116,9 @@ groups:
             datasourceUid: PBFA97CFB590B2093
             model:
               # All onion wallets reach monerod from the IP of the onion-proxy, so
-              # they share the cap --rpc-max-connections-per-private-ip.
+              # they share the cap --rpc-max-connections-per-private-ip. The
+              # onion-proxy pool holds at most 32 of the 50 (onion-proxy.conf).
+              # Above 50% means more than 25 sockets.
               expr: >-
                 max(capacity_rpc_connections{server="restricted",source="onion"}) / max(capacity_rpc_limit{kind="private_ip"})
               instant: true
@@ -142,9 +144,9 @@ groups:
         for: 10m
         annotations:
           summary: "Onion wallets hold {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the private-IP socket cap"
-          affected: "Nobody yet. At the cap monerod refuses new onion wallets."
+          affected: "Nobody yet. When the pool of 32 sockets is full, onion-proxy answers each new request with a 502."
           first_step: "Run grep -E '^capacity_(rpc_connections.*onion|rpc_limit|onion_socket_clients)' /var/lib/node-exporter/textfile/capacity.prom to compare the monerod sockets with the Tor clients."
-          description: "A monerod count far above the Tor clients means pool sockets of the plain path or a client that reconnects. Keep --rpc-max-connections-per-private-ip at or below --rpc-max-connections, or monerod stops at start. See Onion RPC Connections High in docs/capacity.md."
+          description: "All onion requests share the onion-proxy pool (max_conns 32 in onion-proxy.conf). A pool this full for 10 minutes means monerod replies slowly or the onion load is high. Check RPC Busy and monerod CPU. See Onion RPC Connections High in docs/capacity.md."
         labels:
           severity: warning
 
@@ -180,14 +182,16 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [0.8]
+                    # 30 sockets or more. The onion-proxy pool stops at 32
+                    # (max_conns in onion-proxy.conf), 64% of the cap of 50.
+                    params: [0.59]
               refId: C
         for: 5m
         annotations:
           summary: "Onion wallets hold {{ with .Values.B }}{{ humanizePercentage .Value }}{{ else }}an unknown share{{ end }} of the private-IP socket cap"
-          affected: "Onion users soon. At the cap monerod refuses every new onion wallet."
+          affected: "Onion users soon. When the pool of 32 sockets is full, onion-proxy answers each new request with a 502."
           first_step: "Run grep -E '^capacity_(rpc_connections.*onion|rpc_limit|onion_socket_clients)' /var/lib/node-exporter/textfile/capacity.prom to compare the monerod sockets with the Tor clients."
-          description: "Raise --rpc-max-connections-per-private-ip. When Onion Down fires while the counts look low, the count leak holds the onion-proxy IP: restart monerod at a quiet hour. See Onion RPC Connections High in docs/capacity.md."
+          description: "The onion-proxy pool is almost full: monerod replies slowly, or the onion load is high. Check RPC Busy and monerod CPU. When Onion Down fires while the counts look low, the count leak holds the onion-proxy IP: restart monerod at a quiet hour. See Onion RPC Connections High in docs/capacity.md."
         labels:
           severity: critical
 

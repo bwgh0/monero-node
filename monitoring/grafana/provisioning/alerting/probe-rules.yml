@@ -239,8 +239,9 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              # Days left on the cert that each port serves
-              expr: (probe_ssl_earliest_cert_expiry{job="rpc",domain="${DOMAIN}"} - time()) / 86400
+              # Days left on the cert that each port and the TLS onion serve.
+              # monerod serves the RPC ports, and onion-proxy the onion.
+              expr: (probe_ssl_earliest_cert_expiry{job=~"rpc|onion-tls",domain="${DOMAIN}"} - time()) / 86400
               refId: A
           - refId: B
             datasourceUid: __expr__
@@ -264,7 +265,7 @@ groups:
           summary: '{{ .Labels.instance }} serves a cert that expires in {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} days'
           affected: "Nobody yet. When the cert expires: clearnet RPC users and onion users that connect with https."
           first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker logs --tail 50 certbot, then bash /etc/cron.daily/monerod-cert-reload."
-          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod to load the new cert."
+          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod and reloads nginx in onion-proxy to load the new cert."
         labels:
           severity: warning
 
