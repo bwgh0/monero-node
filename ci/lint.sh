@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs shellcheck on every shell script, actionlint on the workflows and a
-# compile check on the Python scripts. Needs only docker and git.
+# Runs shellcheck on every shell script, actionlint on the workflows, a
+# compile check on the Python scripts and a digest check on the compose
+# images. Needs only docker and git.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -27,3 +28,24 @@ for f in sys.argv[1:]:
     ast.parse(open(f, encoding="utf-8").read(), f)' "${pyscripts[@]}"
 fi
 echo "ok"
+
+# Each image must name the digest of its multi-arch index, so a moved or
+# hijacked tag cannot change what runs. Dependabot updates the tag and the
+# digest together.
+mapfile -t composefiles < <(git ls-files --cached --others --exclude-standard '*compose*.yml' '*compose*.yaml')
+((${#composefiles[@]})) || { echo "no compose files found"; exit 1; }
+echo "==> image digests: ${#composefiles[@]} compose files"
+re="^[[:space:]]*image:[[:space:]]*[\"']?([^\"'[:space:]]+)"
+images=0 unpinned=0
+while IFS=: read -r file line text; do
+    [[ $text =~ $re ]] || continue
+    image=${BASH_REMATCH[1]}
+    images=$((images + 1))
+    if [[ ! $image =~ @sha256:[0-9a-f]{64}$ ]]; then
+        echo "$file:$line: $image has no full @sha256: digest. Pin it by the digest of its multi-arch index."
+        unpinned=$((unpinned + 1))
+    fi
+done < <(grep -nH -E '^[[:space:]]*image:' "${composefiles[@]}")
+((images)) || { echo "no image: lines found"; exit 1; }
+((unpinned == 0)) || exit 1
+echo "ok, $images images"

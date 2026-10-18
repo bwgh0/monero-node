@@ -101,17 +101,19 @@ sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}"/monitorin
 # Generate initial Let's Encrypt cert (monerod loads it for native TLS)
 if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
     echo "==> Generating initial TLS certificate via DNS-01..."
-    docker compose run --rm certbot certbot certonly \
+    # The entrypoint of the certbot service is the renew loop, and "docker
+    # compose run" keeps it. Without --entrypoint, the loop ignores these
+    # arguments, runs forever and gets no first cert.
+    docker compose run --rm --entrypoint certbot certbot certonly \
         --dns-route53 \
         -d "${DOMAIN}" \
         --non-interactive \
         --agree-tos \
         --email "admin@monero.one" \
         --no-eff-email
-    # Make certs readable by monerod (runs as non-root)
-    docker run --rm --entrypoint sh \
-        -v monero-node_certbot-conf:/etc/letsencrypt \
-        certbot/dns-route53:v3.1.0 \
+    # Make certs readable by monerod (runs as non-root). The image and the
+    # volume come from the certbot service in docker-compose.yml.
+    docker compose run --rm --no-deps -T --entrypoint sh certbot \
         -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
 else
     echo "    TLS certificate already exists for ${DOMAIN}"

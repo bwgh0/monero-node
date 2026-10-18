@@ -78,7 +78,9 @@ services:
         max-file: "1"
 
   nginx:
-    image: nginx:1.30-alpine
+    # nginx, pinned by the digest of its multi-arch index. onion-proxy and
+    # monerod-rpc-proxy use the same image.
+    image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
     container_name: nginx
     restart: unless-stopped
     read_only: true
@@ -102,7 +104,9 @@ services:
       driver: "none"
 
   certbot:
-    image: certbot/dns-route53:v3.1.0
+    # certbot with the Route 53 DNS plugin, pinned by the digest of its
+    # multi-arch index. scripts/setup.sh also takes this image from here.
+    image: certbot/dns-route53:v3.1.0@sha256:106c888431ea9564e62d7faf58c76b432b97f190f4688b8a6e60549c54aeaddd
     container_name: certbot
     restart: unless-stopped
     volumes:
@@ -179,7 +183,7 @@ services:
     # Bridge between the onion and monerod. Plain HTTP and TLS clients both
     # work. It reaches only the restricted RPC (monerod:18089). No host port.
     # See onion-proxy.conf.
-    image: nginx:1.30-alpine
+    image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
     container_name: onion-proxy
     restart: unless-stopped
     read_only: true
@@ -241,7 +245,7 @@ services:
       driver: "none"
 
   monerod-rpc-proxy:
-    image: nginx:1.30-alpine
+    image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
     container_name: monerod-rpc-proxy
     restart: unless-stopped
     read_only: true
@@ -346,7 +350,8 @@ services:
         max-file: "1"
 
   prometheus:
-    image: prom/prometheus:v3.15.0
+    # Prometheus, pinned by the digest of its multi-arch index
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     container_name: prometheus
     restart: unless-stopped
     command:
@@ -369,7 +374,8 @@ services:
       driver: "none"
 
   grafana:
-    image: grafana/grafana:11.6.16
+    # Grafana, pinned by the digest of its multi-arch index
+    image: grafana/grafana:11.6.16@sha256:d67af92050b8d93b393dc741864752a69c9da1ffa39c1bb9af49ad5d9e47d2c3
     container_name: grafana
     restart: unless-stopped
     environment:
