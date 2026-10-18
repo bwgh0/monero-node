@@ -2,9 +2,40 @@
 set -euo pipefail
 
 # Fresh VPS provisioning script for monero-node
-# Usage: DOMAIN=eu.node.monero.one ./setup.sh
+# Usage: DOMAIN=eu.node.monero.one scripts/setup.sh [--extra-domain <name>]... [--no-start]
+#   --extra-domain  also put this name on the first TLS cert (repeat it for more names)
+#   --no-start      start no service at the end, so tor makes no onion key
+# Run it from a checkout at /opt/monero-node, or from another checkout. From
+# another checkout, it copies the files to /opt/monero-node.
 
 DOMAIN="${DOMAIN:?Set DOMAIN environment variable (e.g. eu.node.monero.one)}"
+EXTRA_DOMAINS=()
+START=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --extra-domain)
+            # A name starts with a letter or digit, so a flag is never taken as one
+            if [[ ! ${2:-} =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+                echo "--extra-domain needs a host name" >&2
+                exit 1
+            fi
+            EXTRA_DOMAINS+=("$2")
+            shift 2
+            ;;
+        --no-start)
+            START=0
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            echo "Usage: DOMAIN=<name> scripts/setup.sh [--extra-domain <name>]... [--no-start]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# The checkout of this script. Find it before the cd below.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> Provisioning monero-node for ${DOMAIN}"
 
@@ -84,15 +115,23 @@ if [ ! -f "${APP_DIR}/aws/credentials" ]; then
     echo "    NOTE: Add AWS credentials to ${APP_DIR}/aws/credentials for DNS-01 cert renewal"
 fi
 
-echo "==> Starting services..."
+if [ "${START}" -eq 1 ]; then
+    echo "==> Starting services..."
+else
+    echo "==> Preparing services (--no-start: none of them starts)..."
+fi
 cd "${APP_DIR}"
 
-# Copy compose and config files (assumes they're in the same directory as this script)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cp "${SCRIPT_DIR}/docker-compose.yml" "${APP_DIR}/"
-cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
-cp "${SCRIPT_DIR}/onion-proxy.conf" "${APP_DIR}/"
-cp -r "${SCRIPT_DIR}/monitoring" "${SCRIPT_DIR}/scripts" "${APP_DIR}/"
+# Copy compose and config files from the checkout of this script. A checkout
+# at /opt/monero-node already has them.
+if [ "${SCRIPT_DIR}" -ef "${APP_DIR}" ]; then
+    echo "    Using the checkout at ${APP_DIR}"
+else
+    cp "${SCRIPT_DIR}/docker-compose.yml" "${APP_DIR}/"
+    cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
+    cp "${SCRIPT_DIR}/onion-proxy.conf" "${APP_DIR}/"
+    cp -r "${SCRIPT_DIR}/monitoring" "${SCRIPT_DIR}/scripts" "${APP_DIR}/"
+fi
 
 # Substitute domain in nginx.conf, onion-proxy.conf (the cert path) and the
 # alert rules (they tell the probes of this box from those of the other box
@@ -101,16 +140,22 @@ sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}/onion-prox
 
 # Generate initial Let's Encrypt cert (monerod loads it for native TLS). The
 # cert is in the certbot-conf volume, so look for it there. Let's Encrypt
-# allows only 5 duplicate certs a week.
+# allows only 5 duplicate certs a week. The --extra-domain names go on this
+# first cert only. certbot names the cert after the first -d (DOMAIN), so
+# its path stays live/${DOMAIN}.
 if ! docker compose run --rm --no-deps -T --entrypoint sh certbot \
     -c 'test -d "/etc/letsencrypt/live/$1"' sh "${DOMAIN}"; then
     echo "==> Generating initial TLS certificate via DNS-01..."
+    CERT_NAMES=(-d "${DOMAIN}")
+    for name in "${EXTRA_DOMAINS[@]}"; do
+        CERT_NAMES+=(-d "${name}")
+    done
     # The entrypoint of the certbot service is the renew loop, and "docker
     # compose run" keeps it. Without --entrypoint, the loop ignores these
     # arguments, runs forever and gets no first cert.
     docker compose run --rm --entrypoint certbot certbot certonly \
         --dns-route53 \
-        -d "${DOMAIN}" \
+        "${CERT_NAMES[@]}" \
         --non-interactive \
         --agree-tos \
         --email "admin@monero.one" \
@@ -121,6 +166,9 @@ if ! docker compose run --rm --no-deps -T --entrypoint sh certbot \
         -c 'chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R a+rX /etc/letsencrypt/live/ /etc/letsencrypt/archive/' 2>/dev/null || true
 else
     echo "    TLS certificate already exists for ${DOMAIN}"
+    if [ "${#EXTRA_DOMAINS[@]}" -gt 0 ]; then
+        echo "    It keeps its names. --extra-domain adds names to a new cert only."
+    fi
 fi
 
 # Install cert-reload cron — monerod never re-reads TLS certs after startup,
@@ -150,6 +198,16 @@ python3 "${SCRIPT_DIR}/scripts/watchdog-metrics.py" || echo "    The GitHub API 
 docker compose run --rm --no-deps --user 0:0 --cap-add CHOWN --cap-add FOWNER \
     --entrypoint /bin/sh tor \
     -c 'chown 104:107 /var/lib/tor/hidden_service && chmod 700 /var/lib/tor/hidden_service'
+
+# --no-start ends here, with no service started. At its first start, tor
+# makes a new onion key unless the tor-keys volume already has one.
+if [ "${START}" -eq 0 ]; then
+    echo ""
+    echo "==> Setup complete. No service started (--no-start)."
+    echo "    Put the onion key in the tor-keys volume before tor starts, or tor makes a new one."
+    echo "    Start services: docker compose up -d [service...]"
+    exit 0
+fi
 
 docker compose up -d
 
