@@ -1,6 +1,8 @@
 services:
   monerod:
-    image: ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5
+    # simple-monerod, pinned by the digest of its multi-arch index. Deploy a
+    # change to this line alone (mixed_data_guard in scripts/deploy.sh).
+    image: ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5@sha256:b28d208602ab5a74685a799f338236113f45cf7972b510ad67666643e0e4a0f3
     container_name: monerod
     restart: unless-stopped
     volumes:

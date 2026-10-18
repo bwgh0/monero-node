@@ -24,7 +24,8 @@ backups=$work/backups
 # A valid onion name that this box does not have
 wrong_onion=zu3oyzi45x3ul24sncs4245nlpz76jzizm36tvrkfvq2r33azzjv5syd.onion
 # Case J: a "new" monerod image, a local tag of the one in docker-compose.yml
-monerod_image=ghcr.io/sethforprivacy/simple-monerod:v0.18.4.5
+monerod_image=$(sed -n 's|^    image: \(ghcr.io/sethforprivacy/simple-monerod:[^ ]*\)$|\1|p' "$root/docker-compose.yml")
+[[ -n $monerod_image ]] || bad "docker-compose.yml has no simple-monerod image"
 new_monerod=mnsim-local/simple-monerod:sim-j
 # Case M: a new monerod image that cannot start
 broken_monerod=mnsim-local/simple-monerod:sim-m
