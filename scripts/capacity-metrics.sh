@@ -13,7 +13,9 @@ set -uo pipefail
 DIR="${TEXTFILE_DIR:-/var/lib/node-exporter/textfile}"
 STATE_DIR="${CAPACITY_STATE_DIR:-/var/lib/monero-node-capacity}"
 CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
-INCLUDED_TRAFFIC_BYTES="${INCLUDED_TRAFFIC_BYTES:-1000000000000}"
+# Outbound traffic included per month: 3 TiB for a cpx31 in ash (hcloud
+# server describe). Inbound traffic is free.
+INCLUDED_TRAFFIC_BYTES="${INCLUDED_TRAFFIC_BYTES:-3298534883328}"
 OUT="${DIR}/capacity.prom"
 CONTAINERS=(monerod onion-proxy tor nginx monerod-rpc-proxy monero-exporter blackbox tor-client prometheus grafana)
 # A hung dockerd must not hang the cron job: each docker call gets 10 s

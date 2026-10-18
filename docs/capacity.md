@@ -15,7 +15,7 @@ Numbers from the capacity audit of October 2026, for one box.
 | Sockets in total, restricted RPC | 100 | default (`--rpc-max-connections`) | the same, for every new client | about 100 open wallets at one time. About 1,500 to 3,000 daily iOS users on the US box. 100 background-sync users fill it alone. | 1 to 2 |
 | Sockets per private IP (all Tor users share the onion-proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | every new Tor wallet fails | 50 open Tor wallets per node, about 400 to 500 daily Tor users | 0 |
 | RPC worker threads | 2 per server | fixed in the monerod build (`daemon/rpc.h`) | requests queue, and latency rises for all users | about 10 wallets that catch up at the same time | 2.6% of one thread |
-| Included traffic | about 1 TB per month (confirm in the Hetzner console) | server plan | overage at about $1.20 per TB (cost only) | about 750 to 1,500 daily users, fewer with many restores | about 40% to 70% |
+| Included traffic | 3 TiB outbound per month (cpx31 in ash, hcloud server describe). Inbound is free. | server plan | overage at $1.20 per TB (cost only) | about 3 times the egress of October 2026 | about 30% (about 1 TB per month) |
 | Disk | 150 GB filesystem | server type (CPX31) | monerod stops when the disk is full | 80% about mid-December 2026; 85% about May 2027 | 78% |
 | monerod CPU | 2 cores (cgroup) | compose `cpus: 2.0` | throttling, slow RPC | far | under 8% |
 | monerod memory | 4 GiB (cgroup) | compose `mem_limit: 4g` | OOM kill and restart | far | 334 MB anonymous |
@@ -188,17 +188,18 @@ The RPC probes of this box take more than 2 s on average over 5 minutes, for
 ### Monthly Traffic High, Included Traffic Used Up
 
 The month will use (or used) more than 80% (or 100%) of the included egress.
-Hetzner bills outgoing traffic only. Overage costs about $1.20 per TB in US
-locations (confirm in the console).
+Hetzner bills outgoing traffic only. Overage costs $1.20 per TB in US
+locations (hcloud server describe).
 
 1. Split the egress: P2P (`monero_net_tx_bytes`), clearnet RPC and Tor
    (`capacity_netns_network_bytes_total`).
 2. For P2P cost, lower `--limit-rate-up`. For RPC growth, accept the cost or
    move the box to an EU location (20 TB included).
 
-The included traffic is 1 TB unless you set it. To change it, put
-`INCLUDED_TRAFFIC_BYTES=<bytes>` before `bash` in the first line of
-scripts/capacity.cron.
+The included traffic is 3 TiB (3298534883328 bytes) unless you set it. That
+is the amount of a cpx31 in ash (hcloud server describe), the plan of both
+boxes. To change it, put `INCLUDED_TRAFFIC_BYTES=<bytes>` before `bash` in
+the first line of scripts/capacity.cron.
 
 ### OOM Kill
 
