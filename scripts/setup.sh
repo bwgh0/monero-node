@@ -98,8 +98,11 @@ cp -r "${SCRIPT_DIR}/monitoring" "${SCRIPT_DIR}/scripts" "${APP_DIR}/"
 # probes of this box from those of the other box by its domain)
 sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}"/monitoring/grafana/provisioning/alerting/*.yml
 
-# Generate initial Let's Encrypt cert (monerod loads it for native TLS)
-if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
+# Generate initial Let's Encrypt cert (monerod loads it for native TLS). The
+# cert is in the certbot-conf volume, so look for it there. Let's Encrypt
+# allows only 5 duplicate certs a week.
+if ! docker compose run --rm --no-deps -T --entrypoint sh certbot \
+    -c 'test -d "/etc/letsencrypt/live/$1"' sh "${DOMAIN}"; then
     echo "==> Generating initial TLS certificate via DNS-01..."
     # The entrypoint of the certbot service is the renew loop, and "docker
     # compose run" keeps it. Without --entrypoint, the loop ignores these
