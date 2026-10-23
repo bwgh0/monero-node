@@ -47,6 +47,13 @@ jobs:
         run: |
           image=$(sed -nE 's/^ +image: (btcpayserver\/tor:[^ ]+)$/\1/p' docker-compose.yml | head -n 1)
           [[ -n $image ]] || { echo "::error::No Tor image in docker-compose.yml"; exit 1; }
+          # Docker Hub sometimes answers 500 for a moment (2026-10-23). Try the
+          # pull 3 times, 30 s apart, before the run fails.
+          for try in 1 2 3; do
+            docker pull -q "$image" >/dev/null && break
+            [[ $try -lt 3 ]] || { echo "::error::docker pull failed 3 times"; exit 1; }
+            sleep 30
+          done
           docker run -d --name tor -p 127.0.0.1:9050:9050 --user 104:107 \
             --tmpfs /run/tor:uid=104,gid=107,mode=0700 --entrypoint tor "$image" \
             --ignore-missing-torrc -f /nonexistent/torrc --defaults-torrc /nonexistent/torrc-defaults \
