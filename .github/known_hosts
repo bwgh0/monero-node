@@ -1,4 +1,6 @@
 # Pinned SSH host keys of the boxes, for scripts/deploy-ssh.sh.
 # A rebuilt box has a new key. Update this file from a trusted ssh-keyscan.
 eu.node.monero.one ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMEob4mOXhY1HSLWBo2+SjxOS/+ZVr53SW7rIReI3hB4
+# The new EU box (Hetzner cpx32, nbg1, 2026-11-02). Delete the line above when the old box is gone.
+eu.node.monero.one ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtejvR4Ik6zdfH4isjxtiUi9YwqnOU+OzZsRYsxj0AZ
 us.node.monero.one ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC7aP02AH7WbD7wdnKD6hbYPV6LVm8Qi/jaz7mKuEdUb

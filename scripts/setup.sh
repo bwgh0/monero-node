@@ -63,7 +63,8 @@ echo "==> Hardening SSH..."
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
-systemctl restart sshd
+# Ubuntu 24.04 has no sshd.service unit. Its unit is ssh.service.
+systemctl restart ssh || systemctl restart sshd
 
 # Kernel hardening
 echo "==> Applying kernel hardening..."
