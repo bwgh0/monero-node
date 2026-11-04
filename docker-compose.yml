@@ -5,6 +5,12 @@ services:
     image: ghcr.io/sethforprivacy/simple-monerod:v0.18.5.4@sha256:e3daef3c78669a1421f06ee43fbeaf263b67794528aba7a70db1007a13721b33
     container_name: monerod
     restart: unless-stopped
+    environment:
+      # Docker's DNS (127.0.0.11) answers through the host's systemd-resolved
+      # stub, which drops every DNSSEC signature, so the DNS checkpoints and the
+      # DNS blocklist never validated. "tcp" makes monerod ask its own built-in
+      # list of public resolvers over TCP, and they keep the signatures.
+      DNS_PUBLIC: tcp
     volumes:
       - bitmonero:/home/monero/.bitmonero
       - certbot-conf:/etc/letsencrypt:ro
