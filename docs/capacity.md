@@ -89,7 +89,7 @@ value of now.
 | Capacity Metrics Stale | the capacity file is older than 5 minutes | 5m | warning |
 | Capacity Metrics Broken | a part of the capacity script failed | 15m | warning |
 | Capacity Digest Missing | the weekly digest did not finish in 8 days | 1h | warning |
-| Egress Rate High | the host sends more than 50 Mbit/s | 30m | warning |
+| Egress Rate High | the host sends at 5 times the pace of its included traffic | 30m | warning |
 | monerod CPU High | monerod uses more than 70% of its CPU limit | 30m | warning |
 | monerod CPU Throttled | the cgroup throttles monerod in more than 10% of periods | 15m | warning |
 | monerod Memory High | anonymous memory above 75% of the memory limit | 15m | warning |
@@ -245,7 +245,9 @@ The weekly digest did not finish in 8 days.
 
 ### Egress Rate High
 
-The host sends more than 50 Mbit/s for 30 minutes (a pace of 16 TB per month).
+For 30 minutes, the host sends at a pace of 5 times its included traffic
+(`INCLUDED_TRAFFIC_BYTES`) per 30 days: 51 Mbit/s with 3 TiB (US), 339 Mbit/s
+with 20 TiB (EU).
 
 1. Split by container (`capacity_netns_network_bytes_total`). P2P peaks come
    from peers that sync from this node. RPC peaks come from restores.

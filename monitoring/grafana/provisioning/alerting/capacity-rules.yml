@@ -652,8 +652,10 @@ groups:
               to: 0
             datasourceUid: PBFA97CFB590B2093
             model:
-              # Bits per second out of the host. 50 Mbit/s is a pace of 16 TB per month.
-              expr: max(rate(capacity_host_network_bytes_total{direction="tx"}[30m])) * 8
+              # Bits per second out of the host, only while the pace would send 5 times
+              # this box's included traffic in 30 days: 51 Mbit/s with 3 TiB, 339 Mbit/s
+              # with 20 TiB. Empty below that, and noDataState OK keeps it quiet.
+              expr: max(rate(capacity_host_network_bytes_total{direction="tx"}[30m])) * 8 > 5 * max(capacity_traffic_included_bytes) * 8 / 2592000
               instant: true
               range: false
               refId: A
@@ -672,7 +674,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [50000000]
+                    params: [0]
               refId: C
         for: 30m
         annotations:
