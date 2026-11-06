@@ -175,8 +175,8 @@ groups:
           affected: >-
             Clearnet RPC users{{ if .Values.E.Labels }}{{ if lt .Values.E.Value 1.0 }} and onion users.
             The onion fails too, so monerod itself is the likely cause{{ end }}{{ end }}.
-          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker compose ps monerod and docker logs --tail 50 monerod."
-          description: "No status OK reply for 6 minutes. An expired or wrong cert also fails this probe. While this alert fires, Onion Down, Monero Exporter Blind and Container Unhealthy stay quiet for monerod. The other box sends Peer RPC Refused when only its probe fails."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker compose ps public-proxy monerod and docker logs --tail 50 public-proxy monerod."
+          description: "No status OK reply for 6 minutes. public-proxy serves these ports and passes TLS to monerod, so check both. An expired or wrong cert also fails this probe. While this alert fires, Onion Down, Monero Exporter Blind and Container Unhealthy stay quiet for monerod. The other box sends Peer RPC Refused when only its probe fails."
         labels:
           severity: critical
 
@@ -240,7 +240,7 @@ groups:
             datasourceUid: PBFA97CFB590B2093
             model:
               # Days left on the cert that each port and the TLS onion serve.
-              # monerod serves the RPC ports, and onion-proxy the onion.
+              # public-proxy serves the RPC ports, and onion-proxy the onion.
               expr: (probe_ssl_earliest_cert_expiry{job=~"rpc|onion-tls",domain="${DOMAIN}"} - time()) / 86400
               refId: A
           - refId: B
@@ -265,7 +265,7 @@ groups:
           summary: '{{ .Labels.instance }} serves a cert that expires in {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} days'
           affected: "Nobody yet. When the cert expires: clearnet RPC users and onion users that connect with https."
           first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker logs --tail 50 certbot, then bash /etc/cron.daily/monerod-cert-reload."
-          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod and reloads nginx in onion-proxy to load the new cert."
+          description: "certbot renews at 30 days left. The daily cron /etc/cron.daily/monerod-cert-reload then restarts monerod and reloads nginx in onion-proxy and public-proxy to load the new cert."
         labels:
           severity: warning
 
@@ -395,8 +395,8 @@ groups:
         annotations:
           summary: "{{ .Labels.instance }} refuses the probes from the other box"
           affected: "Clearnet RPC users that share an IP with other users (NAT, VPN), and maybe more"
-          first_step: "If the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box sent no RPC Endpoint Down, monerod there refuses the IP of this box. Restart monerod on the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box at a quiet hour: docker compose restart monerod."
-          description: "The probe from the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box itself passes when no RPC Endpoint Down arrived from it. Then the per-IP cap or the count leak of monerod holds the IP of this box. See Public IP At RPC Cap in docs/capacity.md. A wrong cert fails both probes, and that box also sends RPC Endpoint Down."
+          first_step: "If the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box sent no RPC Endpoint Down, public-proxy there refuses the IP of this box. Recreate public-proxy on the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box: docker compose up -d --force-recreate public-proxy."
+          description: "The probe from the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box itself passes when no RPC Endpoint Down arrived from it. Then the per-IP cap of public-proxy holds the IP of this box (a shared probe IP at the cap). public-proxy ends client sockets, so the monerod count leak can no longer cause this. See Public IP At RPC Cap in docs/capacity.md. A wrong cert fails both probes, and that box also sends RPC Endpoint Down."
         labels:
           severity: warning
           box: peer

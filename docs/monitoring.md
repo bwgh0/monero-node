@@ -45,7 +45,7 @@ Some rules stay quiet while a rule with the same cause fires:
 
 - Onion Down, Monero Exporter Blind and Container Unhealthy (monerod) stay
   quiet while all RPC probes of the box fail. RPC Endpoint Down covers the
-  monerod outage.
+  RPC outage (public-proxy or monerod).
 - Monero Exporter Blind stays quiet while monero-exporter is down. Node Down
   covers it.
 - Onion TLS Down stays quiet while the plain onion probe fails. Onion Down covers it.

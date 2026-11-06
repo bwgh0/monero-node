@@ -50,6 +50,7 @@ groups:
           summary: "Container {{ .Labels.name }} is not running"
           affected: >-
             {{ if eq .Labels.name "monerod" }}Clearnet RPC users and onion users
+            {{- else if eq .Labels.name "public-proxy" }}Clearnet RPC users
             {{- else if or (eq .Labels.name "tor") (eq .Labels.name "onion-proxy") }}Onion users
             {{- else if eq .Labels.name "certbot" }}Nobody yet. Cert renewals stop.
             {{- else }}Monitoring only{{ end }}
@@ -99,6 +100,7 @@ groups:
           summary: "Container {{ .Labels.name }} crashed and Docker restarted it"
           affected: >-
             {{ if eq .Labels.name "monerod" }}Clearnet RPC users and onion users
+            {{- else if eq .Labels.name "public-proxy" }}Clearnet RPC users
             {{- else if or (eq .Labels.name "tor") (eq .Labels.name "onion-proxy") }}Onion users
             {{- else if eq .Labels.name "certbot" }}Nobody yet. Cert renewals stop.
             {{- else }}Monitoring only{{ end }}
@@ -151,6 +153,7 @@ groups:
           summary: "Container {{ .Labels.name }} fails its healthcheck"
           affected: >-
             {{ if eq .Labels.name "monerod" }}Clearnet RPC users and onion users
+            {{- else if eq .Labels.name "public-proxy" }}Clearnet RPC users
             {{- else if or (eq .Labels.name "tor") (eq .Labels.name "onion-proxy") }}Onion users
             {{- else if eq .Labels.name "certbot" }}Nobody yet. Cert renewals stop.
             {{- else }}Monitoring only{{ end }}

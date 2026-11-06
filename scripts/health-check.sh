@@ -5,7 +5,8 @@ set -euo pipefail
 # Returns 0 if healthy, 1 if unhealthy, 2 if syncing
 # Usage: ./health-check.sh [url]
 
-# Port 80 is nginx. Port 443 is monerod itself, which has no /health.
+# Port 80 is nginx, with /health. Ports 443 and 18089 are public-proxy, which
+# passes the restricted RPC and has no /health.
 URL="${1:-http://localhost/health}"
 
 response=$(curl -sfk --max-time 10 "${URL}" 2>/dev/null) || {
