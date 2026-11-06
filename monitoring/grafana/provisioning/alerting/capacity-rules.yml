@@ -1209,7 +1209,7 @@ groups:
         annotations:
           summary: 'The public-proxy dropped {{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}an unknown number of{{ end }} connections in 15 minutes'
           affected: "Clearnet RPC users"
-          first_step: "Run docker logs --tail 50 public-proxy and look for worker_connections."
+          first_step: "In Grafana compare capacity_public_proxy_accepts_total with capacity_public_proxy_handled_total. On the box run docker exec public-proxy nginx -T | grep worker_ (public-proxy keeps no logs)."
           description: "worker_connections is used up. Raise worker_connections in public-proxy.conf, and add worker_rlimit_nofile plus ulimits in docker-compose.yml. See Public Proxy Dropping Connections in docs/capacity.md."
         labels:
           severity: warning

@@ -11,8 +11,8 @@ Numbers from the capacity audit of October 2026, for one box.
 
 | Limit | Value | Set where | What happens at the limit | Bites at (estimate) | Level at the audit |
 |---|---|---|---|---|---|
-| Sockets per public IP, at public-proxy | 10 | `limit_conn public_ip 10` in public-proxy.conf | nginx refuses the socket (a 503). wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. The refusal ends at nginx, so it cannot leak a monerod count. | 10 open wallets behind one IP, or 4 iOS unlocks at the same time (each unlock adds 2 sockets); shared VPN, carrier NAT or Tor exit IPs | max 1 |
-| Sockets per private IP (the gateway for IPv6 and hairpin clients) | 50 | `limit_conn private_ip 50` in public-proxy.conf | nginx refuses the socket | far: IPv6 clients and hairpin traffic share the Docker gateway IP | 0 |
+| Sockets per public IP, at public-proxy | 10 | `limit_conn public_ip 10` in public-proxy.conf | nginx closes the socket at once (`limit_conn` in the stream block), with no TLS handshake and no HTTP reply. wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. The refusal ends at nginx, so it cannot leak a monerod count. | 10 open wallets behind one IP, or 4 iOS unlocks at the same time (each unlock adds 2 sockets); shared VPN, carrier NAT or Tor exit IPs | max 1 |
+| Sockets per private IP (the gateway for IPv6 and hairpin clients) | 50 | `limit_conn private_ip 50` in public-proxy.conf | nginx closes the socket, with no HTTP reply | far: IPv6 clients and hairpin traffic share the Docker gateway IP | 0 |
 | Sockets in total, restricted RPC | 100 | default (`--rpc-max-connections`) | monerod refuses a new socket from a proxy, and that proxy answers 502 | the two pools take 64 at most, so about 36 short-held sockets on top | under 1 |
 | Sockets per private IP, monerod (each proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | monerod refuses the pool's next socket | far: each pool stays at 32 or less, 18 under the cap | 0 |
 | public-proxy pool to monerod (all clearnet clients) | 32 requests at monerod at a time (`max_conns`) | public-proxy.conf | nginx answers each request above 32 at once with a 502 ("no live upstreams"), and monerod never sees it | 32 requests that wait for monerod's 2 RPC threads at the same time: a monerod that stalls, or far more clearnet load than today. US peak Nov 2026: 95 wallet sockets, 11 requests per second. | under 1 |
@@ -81,7 +81,7 @@ Canaries:
 
 | Layer | Sign |
 |---|---|
-| public-proxy | nginx refuses the socket at the per-IP cap with a 503 (`limit_conn`), and logs nothing about the client. |
+| public-proxy | nginx closes the socket at the per-IP cap (`limit_conn` in the stream block), with no TLS handshake and no HTTP reply, and logs nothing about the client. |
 | public-proxy | A client reset or abort ends here. nginx holds the pool to monerod, so monerod sees a clean close. |
 | Client log | wallet2: "SSL handshake failed on an autodetect connection, reconnecting without SSL" only when public-proxy is down, not at the per-IP cap. |
 | Onion (plain and TLS) | nginx in onion-proxy logs "peer closed connection in SSL handshake" and returns 502. |
@@ -355,9 +355,14 @@ nginx in onion-proxy accepted connections that it could not handle:
 ### Public Proxy Dropping Connections
 
 nginx in public-proxy accepted connections that it could not handle:
-`worker_connections` is used up.
+`worker_connections` is used up. public-proxy keeps no logs (logging driver
+none, for privacy), so `docker logs` shows nothing.
 
-1. Raise `worker_connections` and `worker_rlimit_nofile` in public-proxy.conf.
+1. In Grafana, compare `capacity_public_proxy_accepts_total` with
+   `capacity_public_proxy_handled_total`. The gap is the dropped connections.
+2. On the box, run `docker exec public-proxy nginx -T | grep worker_` to see
+   the current limits.
+3. Raise `worker_connections` and `worker_rlimit_nofile` in public-proxy.conf.
    Each client connection uses 3 nginx connections (client socket, stream hop,
    http), and each reply in the reply store uses 1 more file.
 

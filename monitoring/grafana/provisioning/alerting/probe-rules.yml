@@ -175,7 +175,7 @@ groups:
           affected: >-
             Clearnet RPC users{{ if .Values.E.Labels }}{{ if lt .Values.E.Value 1.0 }} and onion users.
             The onion fails too, so monerod itself is the likely cause{{ end }}{{ end }}.
-          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker compose ps public-proxy monerod and docker logs --tail 50 public-proxy monerod."
+          first_step: "On the {{ with .Labels.node }}{{ toUpper . }} {{ end }}box run docker compose ps public-proxy monerod and docker logs --tail 50 monerod (public-proxy keeps no logs)."
           description: "No status OK reply for 6 minutes. public-proxy serves these ports and passes TLS to monerod, so check both. An expired or wrong cert also fails this probe. While this alert fires, Onion Down, Monero Exporter Blind and Container Unhealthy stay quiet for monerod. The other box sends Peer RPC Refused when only its probe fails."
         labels:
           severity: critical
