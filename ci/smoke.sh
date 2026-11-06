@@ -57,14 +57,16 @@ ok "pulled $(docker compose config --images | sort -u | wc -l) images"
 step "fill the templates, as a deploy does"
 REPO_DIR=$repo bash scripts/deploy.sh render --domain "$domain"
 # shellcheck disable=SC2016 # the literal template text
-if grep -qF '${DOMAIN}' nginx.conf onion-proxy.conf monitoring/grafana/provisioning/alerting/*.yml; then
-    bad "nginx.conf, onion-proxy.conf or an alert rule file still has \${DOMAIN}"
+if grep -qF '${DOMAIN}' nginx.conf onion-proxy.conf public-proxy.conf monitoring/grafana/provisioning/alerting/*.yml; then
+    bad "nginx.conf, onion-proxy.conf, public-proxy.conf or an alert rule file still has \${DOMAIN}"
 fi
 grep -qF "domain=\"$domain\"" monitoring/grafana/provisioning/alerting/probe-rules.yml ||
     bad "the probe rules do not name $domain"
-grep -qF "/etc/letsencrypt/live/$domain/fullchain.pem" onion-proxy.conf ||
-    bad "onion-proxy.conf does not name the cert of $domain"
-ok "nginx.conf, onion-proxy.conf and the alert rules name $domain"
+for f in onion-proxy.conf public-proxy.conf; do
+    grep -qF "/etc/letsencrypt/live/$domain/fullchain.pem" "$f" ||
+        bad "$f does not name the cert of $domain"
+done
+ok "nginx.conf, onion-proxy.conf, public-proxy.conf and the alert rules name $domain"
 
 # onion-proxy loads the cert at start, so nginx -t needs it too
 step "seed a self-signed cert and the onion key dir"
@@ -83,6 +85,7 @@ check() {
 }
 check nginx nginx -t -q
 check nginx onion-proxy -t -q
+check nginx public-proxy -t -q
 # monerod-rpc-proxy names monerod in a fixed upstream, so nginx must
 # resolve it to load the config. Its check runs once the stack is up.
 check promtool prometheus check config /etc/prometheus/prometheus.yml

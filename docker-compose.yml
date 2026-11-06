@@ -36,13 +36,18 @@ services:
       - --enable-dns-blocklist
       - --ban-list=/home/monero/ban_list.txt
       - --disable-rpc-ban
-      # All onion traffic reaches monerod from the onion-proxy IP, and the
-      # exporter from the rpc-proxy IP. Default per private IP is 25.
-      # Must stay at or below --rpc-max-connections (default 100).
+      # Every RPC client now reaches monerod from a proxy IP: public clients
+      # from public-proxy, onion clients from onion-proxy, the exporter from
+      # rpc-proxy. Each proxy keeps a pool (public-proxy and onion-proxy 32
+      # each), so this private cap of 50 leaves 18 free per proxy IP for
+      # counts that monerod holds for a short time. Default per private IP is
+      # 25. Must stay at or below --rpc-max-connections (default 100): the two
+      # pools take 64, so 36 stay for /health, the probes and short-held
+      # counts. public-proxy mirrors the old public cap of 10 per client IP.
       - --rpc-max-connections-per-private-ip=50
-      # Each open wallet holds 1 socket. iOS adds 2 probe sockets per unlock.
-      # Homes, VPN exits and carrier NAT share one IP. The default of 3 refuses
-      # the 4th socket, and wallet2 then stays on plain HTTP until reopened.
+      # public-proxy caps each client IP (public-proxy.conf). This value no
+      # longer limits wallet clients, because monerod sees only the proxy IP.
+      # It stays as a guard for any direct connection.
       - --rpc-max-connections-per-public-ip=10
       - --enforce-dns-checkpointing
       # Privacy hardening
@@ -68,8 +73,11 @@ services:
       start_period: 40s
     ports:
       - "18080:18080"  # P2P
-      - "443:18089"    # HTTPS — monerod native TLS (wallet clients connect here)
-      - "18089:18089"  # Legacy port — same RPC, kept for existing configs
+      # 443 and 18089 are published on public-proxy, not here. monerod counts
+      # RPC sockets per IP, and that count can leak and lock out an IP. nginx
+      # in public-proxy ends the client socket and keeps a small pool to
+      # monerod, so client resets never reach monerod's counter. See
+      # public-proxy.conf.
     networks:
       - public
       - internal
@@ -222,6 +230,45 @@ services:
       options:
         max-size: "1m"
         max-file: "1"
+
+  public-proxy:
+    # The public clearnet RPC on 443 and 18089. nginx ends the client socket
+    # and TLS, counts sockets per client IP (10 public, 50 private, as
+    # monerod did), and keeps one small pool of TLS sockets to the restricted
+    # RPC (monerod:18089). A client reset or reconnect ends here, so it never
+    # reaches monerod's per-IP counter, which can leak. See public-proxy.conf.
+    image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
+    container_name: public-proxy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      # The replies that a slow client still reads (proxy_store in
+      # public-proxy.conf). The cap keeps a flood of slow clients from
+      # taking the RAM of the box.
+      - /var/cache/nginx:size=1g
+    volumes:
+      - ./public-proxy.conf:/etc/nginx/nginx.conf:ro
+      # The Let's Encrypt cert for the TLS clients.
+      # scripts/cert-reload.sh reloads nginx after a renewal.
+      - certbot-conf:/etc/letsencrypt:ro
+    ports:
+      - "443:443"      # HTTPS — wallet clients connect here
+      - "18089:18089"  # Legacy port — same RPC, kept for existing configs
+    depends_on:
+      monerod:
+        condition: service_started
+        # nginx resolves monerod through Docker's DNS, and a recreated
+        # monerod can get a new IP. "resolve" in public-proxy.conf follows
+        # it, and compose also restarts the proxy after monerod.
+        restart: true
+    networks:
+      - public
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "none"
 
   node-exporter:
     image: prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0

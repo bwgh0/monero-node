@@ -458,6 +458,56 @@ monerod_started=$(started monerod)
 sha=$base
 record "J3 back to base, by hand with --allow-mixed-data and no SSH_KEY: deployed (exit 0), tor works again, onion and key same"
 
+# The stack as on main before public-proxy: monerod publishes 443 and 18089.
+before_public_proxy() {
+    rm public-proxy.conf
+    python3 - docker-compose.yml <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+text, n = re.subn(r"\n  public-proxy:\n(?:(?:    .*|)\n)*?(?=  \S)", "\n", text)
+assert n == 1, "no public-proxy service"
+p2p = '      - "18080:18080"  # P2P\n'
+assert text.count(p2p) == 1, "no P2P port line on monerod"
+text = text.replace(p2p, p2p + '      - "443:18089"\n      - "18089:18089"\n')
+open(path, "w").write(text)
+PY
+}
+published() { docker port "$(docker compose ps -q "$1")" 2>/dev/null | sed 's/.*://' | sort -u | tr '\n' ' '; }
+
+step "case P: the port handover. Back to the stack before public-proxy, then forward to the tree under test."
+t0=$SECONDS
+old=$(change "the stack before public-proxy" before_public_proxy)
+git -C "$dev" show "$old:docker-compose.yml" | grep -q '^  public-proxy:' && bad "the case P change did not remove public-proxy"
+[[ $(git -C "$dev" show "$old:docker-compose.yml" | grep -c '"443:18089"') == 1 ]] || bad "the case P change did not give 443 to monerod"
+# Back: public-proxy is an orphan that holds 443 and 18089 until compose
+# removes it. monerod must bind them after that.
+deploy deploy "$old"
+want_rc 0
+want_head "$old"
+want_all_running
+want_same_onion
+[[ -z $(docker ps -aq --filter name='^public-proxy$') ]] || bad "public-proxy still exists on the stack before it"
+[[ $(published monerod) == *"443 "* && $(published monerod) == *"18089 "* ]] ||
+    bad "monerod does not publish 443 and 18089 (it publishes: $(published monerod))"
+# Forward, as the real deploy of this change: monerod must release 443 and
+# 18089 before public-proxy binds them.
+g reset -q --hard "$base"
+g push -qf origin HEAD:main
+deploy deploy "$base"
+want_rc 0
+want_head "$base"
+want_all_running
+want_same_onion
+[[ $(published monerod) != *"443 "* && $(published monerod) != *"18089 "* ]] ||
+    bad "monerod still publishes an RPC port (it publishes: $(published monerod))"
+[[ $(published public-proxy) == *"443 "* && $(published public-proxy) == *"18089 "* ]] ||
+    bad "public-proxy does not publish 443 and 18089 (it publishes: $(published public-proxy))"
+grep -q 'recreated: monerod' "$work/last.log" || bad "the forward deploy did not recreate monerod"
+monerod_started=$(started monerod)
+sha=$base
+record "P port handover: back to the stack before public-proxy and forward again, both deployed (exit 0) with RPC on 443 and 18089"
+
 step "case G: a change to monerod only. The rpc proxy must follow the new monerod."
 t0=$SECONDS
 proxy_started=$(started monerod-rpc-proxy)

@@ -2,9 +2,10 @@
 # monerod (epee) loads the TLS cert once at startup and never re-reads it,
 # so certbot renewals silently expire in RAM ~90 days later. Restart
 # monerod whenever the cert on disk is newer than the running container.
-# nginx in onion-proxy serves the same cert to the onion TLS clients, and it
-# loads the cert only at start and at "nginx -s reload". Reload it whenever
-# the cert that it serves is not the cert on disk.
+# nginx in onion-proxy and public-proxy serves the same cert (to the onion
+# TLS clients, and to the clearnet clients on 443 and 18089). Each loads the
+# cert only at start and at "nginx -s reload". Reload it whenever the cert
+# that it serves is not the cert on disk.
 # Installed as /etc/cron.daily/monerod-cert-reload by setup.sh and deploy.sh.
 set -euo pipefail
 
@@ -28,20 +29,40 @@ if [ "$CERT_TIME" -gt "$STARTED" ]; then
     docker restart monerod
 fi
 
-# The cert check reads the cert that onion-proxy serves, not a time, so a
+# Each cert check reads the cert that the proxy serves, not a time, so a
 # renewal is not missed when a deploy restarted monerod first. A reload is
 # graceful: requests in progress finish, and idle pool sockets close cleanly.
-[ "$(docker inspect -f '{{.State.Running}}' onion-proxy 2>/dev/null || true)" = true ] || exit 0
-SOCK=/var/lib/docker/volumes/monero-node_onion-sock/_data/monerod.sock
 sha256() { openssl x509 -noout -fingerprint -sha256 2>/dev/null || true; }
-served() { openssl s_client -unix "$SOCK" </dev/null 2>/dev/null | sha256; }
 WANT=$(sha256 <"$CERT")
 [ -n "$WANT" ] || exit 0
-[ "$(served)" != "$WANT" ] || exit 0
-docker exec onion-proxy nginx -s reload
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    sleep 1
-    [ "$(served)" != "$WANT" ] || exit 0
-done
-echo "monerod-cert-reload: onion-proxy does not serve the cert on disk after nginx -s reload. See docker logs --tail 20 onion-proxy." >&2
-exit 1
+
+# reload_proxy <container> <served-command>: reload nginx when the cert it
+# serves is not the cert on disk, then wait until it serves the new one.
+rc=0
+reload_proxy() {
+    container=$1
+    shift
+    [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" = true ] || return 0
+    [ "$("$@")" != "$WANT" ] || return 0
+    docker exec "$container" nginx -s reload
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 1
+        [ "$("$@")" != "$WANT" ] || return 0
+    done
+    echo "monerod-cert-reload: $container does not serve the cert on disk after nginx -s reload. See docker logs --tail 20 $container." >&2
+    rc=1
+}
+
+# onion-proxy serves the onion TLS clients on a unix socket.
+SOCK=/var/lib/docker/volumes/monero-node_onion-sock/_data/monerod.sock
+# shellcheck disable=SC2329 # reload_proxy calls it
+served_onion() { openssl s_client -unix "$SOCK" </dev/null 2>/dev/null | sha256; }
+reload_proxy onion-proxy served_onion
+
+# public-proxy serves the clearnet clients on 443 (and 18089, the same cert).
+# openssl connects to the published port on loopback.
+# shellcheck disable=SC2329 # reload_proxy calls it
+served_public() { openssl s_client -connect 127.0.0.1:443 </dev/null 2>/dev/null | sha256; }
+reload_proxy public-proxy served_public
+
+exit "$rc"

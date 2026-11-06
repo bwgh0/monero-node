@@ -156,9 +156,12 @@ def collect(p, box):
     x = EXPORTER
     v = p.value
     d = {}
-    d["rpc_public_peak"] = v(f'max_over_time(sum(capacity_rpc_connections{{server="restricted",source="public"}})[7d:1m])')
-    d["rpc_public_avg"] = v(f'avg_over_time(sum(capacity_rpc_connections{{server="restricted",source="public"}})[7d:1m])')
+    # Clearnet wallets reach monerod only through public-proxy now, so the
+    # wallet count is the proxy client sockets, not monerod's "public" source.
+    d["rpc_public_peak"] = v('max_over_time(capacity_public_proxy_clients[7d:1m])')
+    d["rpc_public_avg"] = v('avg_over_time(capacity_public_proxy_clients[7d:1m])')
     d["rpc_total_peak"] = v('max_over_time(sum(capacity_rpc_connections{server="restricted"})[7d:1m])')
+    d["pool_peak"] = v('max_over_time(max(capacity_rpc_connections{server="restricted",source="public_proxy"})[7d:1m])')
     d["onion_peak"] = v('max_over_time(max(capacity_rpc_connections{server="restricted",source="onion"})[7d:1m])')
     lim = p.by("max by (kind) (capacity_rpc_limit)", "kind")
     d["limit_total"], d["limit_public"], d["limit_private"] = lim.get("total"), lim.get("public_ip"), lim.get("private_ip")
@@ -334,6 +337,7 @@ def message(d, rows, prom_errors):
     box = d["box"]
     lines = [f"monero-node weekly: {box} ({d['week_start']} to {d['week_end']})", ""]
     lines.append(f"RPC sockets: peak {of(d.get('rpc_total_peak'), d.get('limit_total'))}. "
+                 f"Clearnet pool: {of(d.get('pool_peak'), d.get('limit_private'))}. "
                  f"Clearnet wallets: peak {n0(d.get('rpc_public_peak'))}, avg {f1(d.get('rpc_public_avg'))}, "
                  f"{n0(d.get('socket_hours_per_day'))} socket-hours/day")
     lines.append(f"Tor sockets: peak {of(d.get('onion_peak'), d.get('limit_private'))}. "

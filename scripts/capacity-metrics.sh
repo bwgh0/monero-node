@@ -23,7 +23,7 @@ included=$(sed -n 's/^INCLUDED_TRAFFIC_BYTES=//p' "$ENV_FILE" 2>/dev/null | tail
 [[ $included =~ ^[0-9]+$ ]] || included=3298534883328
 INCLUDED_TRAFFIC_BYTES="${INCLUDED_TRAFFIC_BYTES:-$included}"
 OUT="${DIR}/capacity.prom"
-CONTAINERS=(monerod onion-proxy tor nginx monerod-rpc-proxy monero-exporter blackbox tor-client prometheus grafana)
+CONTAINERS=(monerod public-proxy onion-proxy tor nginx monerod-rpc-proxy monero-exporter blackbox tor-client prometheus grafana)
 # A hung dockerd must not hang the cron job: each docker call gets 10 s
 dk() { timeout -k 5 10 docker "$@"; }
 
@@ -87,7 +87,11 @@ rpc_part() {
             srv["18089"] = "restricted"; srv["18081"] = "unrestricted"
             cls["onion-proxy"] = "onion"; cls["nginx"] = "nginx"; cls["blackbox"] = "blackbox"
             cls["monerod-rpc-proxy"] = "rpc_proxy"; cls["gateway"] = "gateway"
-            ns = split("public onion gateway nginx blackbox rpc_proxy other_private", sources, " ")
+            cls["public-proxy"] = "public_proxy"
+            # Public clients reach monerod only through public-proxy now, so
+            # "public" stays near 0 here (a guard for any direct connection).
+            # "public_proxy" is the pool from public-proxy, like "onion".
+            ns = split("public public_proxy onion gateway nginx blackbox rpc_proxy other_private", sources, " ")
             nt = split("estab syn-recv fin-wait-1 fin-wait-2 time-wait close-wait last-ack closing", states, " ")
         }
         {
@@ -117,12 +121,13 @@ rpc_part() {
                 if (z[2] == "public") { if (tw[k] > twpub[z[1]]) twpub[z[1]] = tw[k]; if (tw[k] >= 4) churn[z[1]]++ }
                 else if (tw[k] > twpriv[z[1]]) twpriv[z[1]] = tw[k]
             }
+            # The per-public-IP metrics (capacity_rpc_public_ips,
+            # capacity_rpc_public_max_per_ip, capacity_rpc_public_ips_at_cap,
+            # capacity_rpc_churn_ips and the public time-wait) now come from
+            # public_proxy_part, because public clients reach the proxy, not
+            # monerod. Here only the private time-wait stays (monerod sees the
+            # proxies and the exporter as private IPs).
             for (s in ips) {
-                printf "capacity_rpc_public_ips{server=\"%s\"} %d\n", s, ips[s]
-                printf "capacity_rpc_public_max_per_ip{server=\"%s\"} %d\n", s, mx[s]
-                printf "capacity_rpc_public_ips_at_cap{server=\"%s\"} %d\n", s, atcap[s]
-                printf "capacity_rpc_churn_ips{server=\"%s\"} %d\n", s, churn[s]
-                printf "capacity_rpc_timewait_max_per_ip{server=\"%s\",class=\"public\"} %d\n", s, twpub[s]
                 printf "capacity_rpc_timewait_max_per_ip{server=\"%s\",class=\"private\"} %d\n", s, twpriv[s]
             }
             printf "capacity_p2p_connections{direction=\"in\"} %d\ncapacity_p2p_connections{direction=\"out\"} %d\n", p2p["in"], p2p["out"]
@@ -232,6 +237,49 @@ dnat_part() {
         END { for (p in n) printf "capacity_new_connections_total{port=\"%s\"} %d\n", p, n[p] }'
 }
 
+# --- Public side: the client sockets at public-proxy and its counters.
+# Public clients reach monerod only through this proxy, so the per-public-IP
+# metrics are read here (client side), with the same names and the restricted
+# server label as before. The cap is monerod's public cap, which
+# public-proxy.conf mirrors (limit_conn public_ip). A private source (the
+# network gateway for IPv6 and hairpin traffic) is not a client IP, so it is
+# left out of the per-IP counts, as it was at monerod.
+public_proxy_part() {
+    local o=${PID[public-proxy]:-0} cap s
+    ((o > 0))
+    cap=$(flag rpc-max-connections-per-public-ip)
+    cap=${cap:-10}
+    # Client sockets on the listen ports (443 and 18089). The pool sockets to
+    # monerod have an ephemeral local port, so they are not counted.
+    nsenter -t "$o" -n ss -Htan | awk -v cap="$cap" '
+        function port(a) { sub(/.*:/, "", a); return a }
+        function host(a) { sub(/:[^:]*$/, "", a); gsub(/[][]/, "", a); sub(/^::ffff:/, "", a); sub(/%.*/, "", a); return a }
+        function private(a) { return a ~ /^(10|127)\./ || a ~ /^192\.168\./ || a ~ /^172\.(1[6-9]|2[0-9]|3[01])\./ || a ~ /^(::1$|f[cd]|fe[89ab])/ }
+        {
+            st = tolower($1); if (st == "listen") next
+            lp = port($4); ip = host($5)
+            if (lp != "443" && lp != "18089") next
+            if (private(ip)) next
+            if (st == "estab") { clients++; per[ip]++ }
+            if (st == "time-wait") tw[ip]++
+        }
+        END {
+            ips = mx = atcap = churn = twmax = 0
+            for (k in per) { ips++; if (per[k] > mx) mx = per[k]; if (per[k] >= cap + 0) atcap++ }
+            for (k in tw) { if (tw[k] > twmax) twmax = tw[k]; if (tw[k] >= 4) churn++ }
+            printf "capacity_public_proxy_clients %d\n", clients
+            printf "capacity_rpc_public_ips{server=\"restricted\"} %d\n", ips
+            printf "capacity_rpc_public_max_per_ip{server=\"restricted\"} %d\n", mx
+            printf "capacity_rpc_public_ips_at_cap{server=\"restricted\"} %d\n", atcap
+            printf "capacity_rpc_churn_ips{server=\"restricted\"} %d\n", churn
+            printf "capacity_rpc_timewait_max_per_ip{server=\"restricted\",class=\"public\"} %d\n", twmax
+        }'
+    s=$(nsenter -t "$o" -n curl -sf -m 5 http://127.0.0.1:8081/status)
+    awk '/^Active connections/ { printf "capacity_public_proxy_connections{state=\"active\"} %s\n", $3 }
+         /^ *[0-9]+ +[0-9]+ +[0-9]+ *$/ { printf "capacity_public_proxy_accepts_total %s\ncapacity_public_proxy_handled_total %s\ncapacity_public_proxy_requests_total %s\n", $1, $2, $3 }
+         /^Reading/ { printf "capacity_public_proxy_connections{state=\"reading\"} %s\ncapacity_public_proxy_connections{state=\"writing\"} %s\ncapacity_public_proxy_connections{state=\"waiting\"} %s\n", $2, $4, $6 }' <<<"$s"
+}
+
 # --- Onion side: Tor client streams and the onion-proxy counters (stub_status)
 onion_proxy_part() {
     local o=${PID[onion-proxy]:-0} s
@@ -257,7 +305,7 @@ tor_part() {
 running() { [[ ${PID[$1]:-0} -gt 0 && -n ${CID[$1]:-} ]]; }
 
 if running monerod; then run rpc rpc_part; fi
-for c in monerod onion-proxy tor; do
+for c in monerod public-proxy onion-proxy tor; do
     if running "$c"; then run "netns_$c" netns_part "$c"; fi
 done
 for c in "${CONTAINERS[@]}"; do
@@ -266,6 +314,7 @@ done
 run host_net host_net_part
 run host_tcp host_tcp_part
 run dnat dnat_part
+if running public-proxy; then run public_proxy public_proxy_part; fi
 if running onion-proxy; then run onion_proxy onion_proxy_part; fi
 if running tor; then run tor tor_part; fi
 printf 'capacity_metrics_last_run_timestamp_seconds %s\n' "$(date +%s)" >>"$RAW"

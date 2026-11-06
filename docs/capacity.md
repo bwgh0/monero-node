@@ -11,10 +11,13 @@ Numbers from the capacity audit of October 2026, for one box.
 
 | Limit | Value | Set where | What happens at the limit | Bites at (estimate) | Level at the audit |
 |---|---|---|---|---|---|
-| Sockets per public IP, restricted RPC | 10 (default 3) | `--rpc-max-connections-per-public-ip=10` | monerod accepts and closes the socket. wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. | 10 open wallets behind one IP, or 4 iOS unlocks at the same time (each unlock adds 2 sockets); shared VPN, carrier NAT or Tor exit IPs | max 1 |
-| Sockets in total, restricted RPC | 100 | default (`--rpc-max-connections`) | the same, for every new client | about 100 open wallets at one time. About 1,500 to 3,000 daily iOS users on the US box. 100 background-sync users fill it alone. | 1 to 2 |
-| Sockets per private IP (all Tor users share the onion-proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | every new Tor wallet fails | only through the count leak: the onion-proxy pool stays at 32 or less | 0 |
+| Sockets per public IP, at public-proxy | 10 | `limit_conn public_ip 10` in public-proxy.conf | nginx refuses the socket (a 503). wallet2 changes to plain HTTP and stays broken until the user reopens the wallet. The refusal ends at nginx, so it cannot leak a monerod count. | 10 open wallets behind one IP, or 4 iOS unlocks at the same time (each unlock adds 2 sockets); shared VPN, carrier NAT or Tor exit IPs | max 1 |
+| Sockets per private IP (the gateway for IPv6 and hairpin clients) | 50 | `limit_conn private_ip 50` in public-proxy.conf | nginx refuses the socket | far: IPv6 clients and hairpin traffic share the Docker gateway IP | 0 |
+| Sockets in total, restricted RPC | 100 | default (`--rpc-max-connections`) | monerod refuses a new socket from a proxy, and that proxy answers 502 | the two pools take 64 at most, so about 36 short-held sockets on top | under 1 |
+| Sockets per private IP, monerod (each proxy IP) | 50 | `--rpc-max-connections-per-private-ip=50` | monerod refuses the pool's next socket | far: each pool stays at 32 or less, 18 under the cap | 0 |
+| public-proxy pool to monerod (all clearnet clients) | 32 requests at monerod at a time (`max_conns`) | public-proxy.conf | nginx answers each request above 32 at once with a 502 ("no live upstreams"), and monerod never sees it | 32 requests that wait for monerod's 2 RPC threads at the same time: a monerod that stalls, or far more clearnet load than today. US peak Nov 2026: 95 wallet sockets, 11 requests per second. | under 1 |
 | onion-proxy pool to monerod (plain and TLS onion clients) | 32 requests at monerod at a time (`max_conns`) | onion-proxy.conf | nginx answers each request above 32 at once with a 502 ("no live upstreams"), and monerod never sees it | 32 requests that wait for monerod's 2 RPC threads at the same time: a monerod that stalls, or far more onion load than Tor can carry. 60 parallel Tor clients used 6 sockets in the lab. | 1 to 2 |
+| public-proxy reply store | 1 GiB tmpfs (`/var/cache/nginx`) | docker-compose.yml | nginx stops the reply in the middle ("No space left on device" in its log) | about 40 replies of 25 MB that a slow client still reads at the same time | 0 |
 | onion-proxy reply store | 1 GiB tmpfs (`/var/cache/nginx`) | docker-compose.yml | nginx stops the reply in the middle ("No space left on device" in its log) | about 40 replies of 25 MB that Tor still sends at the same time | 0 |
 | RPC worker threads | 2 per server | fixed in the monerod build (`daemon/rpc.h`) | requests queue, and latency rises for all users | about 10 wallets that catch up at the same time | 2.6% of one thread |
 | Included traffic | 3 TiB outbound per month (cpx31 in ash, hcloud server describe). Inbound is free. | server plan | overage at $1.20 per TB (cost only) | about 3 times the egress of October 2026: about 5,000 more daily users, fewer with many restores | about 30% (about 1 TB per month) |
@@ -23,6 +26,7 @@ Numbers from the capacity audit of October 2026, for one box.
 | monerod memory | 4 GiB (cgroup) | compose `mem_limit: 4g` | OOM kill and restart | far | 334 MB anonymous |
 | monerod open files | 1024 soft | Docker default | accept fails | only after the socket caps go up | 111 |
 | onion-proxy | 1 worker x 4096 connections, 16384 open files | onion-proxy.conf | nginx drops connections | about 1,300 open Tor connections (each uses 3 nginx connections) | about 2 |
+| public-proxy | 1 worker x 8192 connections, 32768 open files | public-proxy.conf | nginx drops connections | about 2,700 open client connections (each uses 3 nginx connections) | about 30 |
 | Request size, response soft limit | 1 MB, 25 MiB | monerod defaults | request refused, response cut | far | |
 
 Assumptions behind the user counts:
@@ -43,18 +47,33 @@ Tor wallets poll every 10 s, so at that load each poll needs a new connection.
 
 ## The per-IP count leak
 
-monerod v0.18.4.5 counts the sockets of each IP, and some path skips the
-decrement. Many short connections from one IP at the same time is the known
-trigger. A monerod restart resets every count. A leaked count makes monerod
-refuse an IP below the real number of sockets.
+monerod counts the sockets of each IP, and some path skips the decrement.
+Many short connections from one IP at the same time, or a client reset in the
+middle of a reply, is the known trigger. A monerod restart resets every
+count. A leaked count makes monerod refuse an IP below the real number of
+sockets. On the US box in November 2026, this locked out every wallet behind
+one carrier IP twice, until a restart.
 
-The IPs at risk: the onion-proxy IP (all Tor users), VPN exits, carrier NAT
-and homes with several devices.
+Every RPC client now reaches monerod through a proxy, so no wallet IP reaches
+monerod's counter:
+
+- Clearnet clients (443 and 18089) go through public-proxy. nginx ends the
+  client socket and TLS and keeps one small pool to monerod. A client reset,
+  abort or reconnect ends at nginx (public-proxy.conf). public-proxy also
+  caps each client IP, so one shared IP can no longer fill a cap at monerod.
+- Onion clients go through onion-proxy, the same way, since 2026-10-18.
+- The exporter goes through monerod-rpc-proxy.
+
+What is left: monerod sees only the proxy IPs, each with a bounded pool (32,
+well under the private cap of 50). A proxy reset cannot grow its pool, so a
+leak on a proxy IP stays small. A monerod restart still clears any count.
 
 Canaries:
 
 - Each box probes the RPC of the other box every minute from its public IP.
-  Peer RPC Refused fires when only the other box fails these probes.
+  Peer RPC Refused fires when only the other box fails these probes. The
+  probe now ends at public-proxy, so a refusal means the per-IP cap of
+  public-proxy, not a monerod leak.
 - The onion probes share the onion-proxy IP with all Tor users. Onion Down
   while the RPC passes points to the count of the onion-proxy IP.
 
@@ -62,13 +81,12 @@ Canaries:
 
 | Layer | Sign |
 |---|---|
-| monerod | No log line. The accept handler closes the socket. |
-| Kernel, monerod namespace | `TCPAbortOnClose` rises when the client sent its ClientHello before the close. |
-| Kernel, monerod namespace | Server-side TIME-WAIT sockets pile up for one IP. A downgraded wallet makes about 6 failing plain-HTTP connections per minute. |
-| Wire | Plain HTTP (`POST /...`) arrives on 443 or 18089. |
-| Client log | wallet2: "SSL handshake failed on an autodetect connection, reconnecting without SSL". The app shows no sync. |
+| public-proxy | nginx refuses the socket at the per-IP cap with a 503 (`limit_conn`), and logs nothing about the client. |
+| public-proxy | A client reset or abort ends here. nginx holds the pool to monerod, so monerod sees a clean close. |
+| Client log | wallet2: "SSL handshake failed on an autodetect connection, reconnecting without SSL" only when public-proxy is down, not at the per-IP cap. |
 | Onion (plain and TLS) | nginx in onion-proxy logs "peer closed connection in SSL handshake" and returns 502. |
-| Probes | Peer RPC Refused, or Onion Down while the RPC passes. |
+| monerod (only a direct connection, which clients no longer make) | No log line. The accept handler closes the socket. |
+| Probes | Peer RPC Refused (public-proxy per-IP cap), or Onion Down while the RPC passes. |
 
 ## Capacity alerts
 
@@ -79,9 +97,10 @@ value of now.
 | Title | Fires when | for | Severity |
 |---|---|---|---|
 | RPC Connections High / Critical | restricted RPC sockets above 50% / 80% of `--rpc-max-connections` | 10m / 5m | warning / critical |
+| Public Proxy Pool High / Critical | public-proxy pool sockets above 50% / 80% of the private-IP cap | 10m / 5m | warning / critical |
 | Onion RPC Connections High / Critical | onion-proxy sockets above 50% / 80% of the private-IP cap | 10m / 5m | warning / critical |
-| Public IP At RPC Cap | a public IP holds as many sockets as the per-IP cap | 15m | warning |
-| RPC Clients Reconnecting | a public IP has 4 or more sockets that monerod closed in the last minute | 10m | warning |
+| Public IP At RPC Cap | a public client IP holds as many sockets as the public-proxy per-IP cap | 15m | warning |
+| RPC Clients Reconnecting | a public client IP has 4 or more sockets that public-proxy closed in the last minute | 10m | warning |
 | RPC Busy High / Critical | the 2 restricted RPC threads are busy above 50% / 80% of the time | 15m / 10m | warning / critical |
 | Monthly Traffic High | the month will use more than 80% of the included egress (from day 4) | 1h | warning |
 | Included Traffic Used Up | the month used more than the included egress | 1h | warning |
@@ -99,6 +118,7 @@ value of now.
 | Disk Fills Within 30 Days | at the 7-day trend, the disk passes 85% within 30 days | 1h | warning |
 | Tor CPU High | Tor uses more than 0.7 core | 30m | warning |
 | Onion Proxy Dropping Connections | nginx in onion-proxy accepted connections that it could not handle | 0s | warning |
+| Public Proxy Dropping Connections | nginx in public-proxy accepted connections that it could not handle | 0s | warning |
 
 The probe rule RPC Slow is in probe-rules.yml. Its runbook is below too.
 
@@ -115,19 +135,40 @@ To read the capacity file: `grep -E '^capacity_rpc' /var/lib/node-exporter/textf
 
 ### RPC Connections High, RPC Connections Critical
 
-Open wallets fill the socket limit of the public RPC. At the limit, monerod
-refuses every new wallet, and that wallet stays broken until it reopens.
+The two pools and the probes fill monerod's total socket limit. The pools
+take 64 of 100 at most, so this high means a pool grew or the exporter leaks
+sockets. At the limit monerod refuses a new socket from a proxy, and that
+proxy answers 502.
 
-1. Check the split: `capacity_rpc_connections` by source. Many public sockets
-   means real growth. Many from one source means one client or the onion-proxy.
+1. Check the split: `capacity_rpc_connections` by source. `public_proxy` and
+   `onion` are the pools. A big `rpc_proxy` or a growing total points to a
+   leak. Check Public Proxy Pool and Onion RPC Connections first.
 2. Compare the other box. When node.monero.one points to one box only, point
    it to both.
 3. Raise the caps on both boxes: `--rpc-max-connections=500`,
-   `--rpc-max-connections-per-public-ip=16`,
-   `--rpc-max-connections-per-private-ip=200` and `ulimits: nofile` 65536 in
-   docker-compose.yml. The deploy restarts monerod. Above 120 sockets, epee
-   shortens the idle timeouts (see Limits), so watch Onion Down after the change.
+   `--rpc-max-connections-per-private-ip=200`, the pool `max_conns` and
+   `keepalive` in public-proxy.conf and onion-proxy.conf, and `ulimits: nofile`
+   65536 in docker-compose.yml. The deploy restarts monerod. Keep each pool
+   well under the private cap.
 4. For lasting growth, add a node and put it in DNS.
+
+### Public Proxy Pool High, Public Proxy Pool Critical
+
+All clearnet requests go through one pool of sockets in public-proxy
+(public-proxy.conf). The pool holds at most 32 sockets (`max_conns`), 18 under
+the private-IP cap of 50. High fires above 25 sockets, Critical at 30. With a
+full pool, nginx answers each new request at once with a 502, so some wallets
+fail to sync. A pool this full means requests wait for monerod: its 2 RPC
+threads are busy, or it stalls.
+
+1. Check RPC Busy, monerod CPU and `docker logs --tail 50 monerod`. A slow
+   monerod fills the pool for all clearnet users.
+2. Compare `capacity_public_proxy_clients` with the monerod pool count, to see
+   how much real load there is.
+3. To raise the pool, raise `max_conns` and `keepalive` in public-proxy.conf
+   together, and raise `--rpc-max-connections-per-private-ip` so the pool stays
+   well under it. Keep that cap at or below `--rpc-max-connections`, or monerod
+   stops at start. Move the alert thresholds in capacity-rules.yml with the pool.
 
 ### Onion RPC Connections High, Onion RPC Connections Critical
 
@@ -152,28 +193,28 @@ that requests wait for monerod: its 2 RPC threads are busy, or it stalls.
 
 ### Public IP At RPC Cap
 
-One public IP holds as many sockets as the cap for 15 minutes. monerod refuses
-its next socket, and that wallet changes to plain HTTP.
+One public client IP holds as many sockets as the public-proxy per-IP cap
+(`limit_conn public_ip`, 10) for 15 minutes. public-proxy refuses its next
+socket. The refusal ends at nginx, so it cannot lock out monerod.
 
 1. Read `capacity_rpc_public_max_per_ip` and its history in Grafana. Short
    peaks are iOS unlocks. A flat line at the cap means a shared IP (VPN,
    carrier NAT) or one busy client.
-2. Raise `--rpc-max-connections-per-public-ip` in docker-compose.yml.
-3. When Peer RPC Refused also fires, the leak may hold that IP. Restart
-   monerod at a quiet hour.
+2. Raise `limit_conn public_ip` in public-proxy.conf when it is real sharing,
+   not abuse.
+3. This no longer needs a monerod restart. A shared IP at the cap is one busy
+   IP, not a box-wide outage.
 
 ### RPC Clients Reconnecting
 
-A public IP has 4 or more sockets that monerod closed in the last minute, for
-10 minutes. This is the pattern of a downgraded wallet (plain HTTP to the TLS
-port every 10 s) or of a refused client that tries again.
+A public client IP has 4 or more sockets that public-proxy closed in the last
+minute, for 10 minutes. This is the pattern of a wallet behind a shared IP at
+the per-IP cap that retries, or of a downgraded wallet (plain HTTP to the TLS
+port every 10 s).
 
-1. Check Public IP At RPC Cap, RPC Connections and Peer RPC Refused. A refusal
-   comes first.
-2. Fix the cause (the cap or the leak). The wallet recovers when the user
-   reopens it or pulls to refresh. Android users move to another node.
-3. Write down the time since the last monerod restart. It is a data point for
-   the leak rate.
+1. Check Public IP At RPC Cap and Public Proxy Pool. A refusal comes first.
+2. Fix the cause (the per-IP cap). The wallet recovers when the user reopens
+   it or pulls to refresh. The reconnects end at public-proxy, not monerod.
 
 The probes of the other box make about 2 TIME-WAIT sockets per minute, below
 the level of 4.
@@ -311,6 +352,15 @@ nginx in onion-proxy accepted connections that it could not handle:
    Each Tor connection uses 3 nginx connections, and each reply in the
    reply store uses 1 more file.
 
+### Public Proxy Dropping Connections
+
+nginx in public-proxy accepted connections that it could not handle:
+`worker_connections` is used up.
+
+1. Raise `worker_connections` and `worker_rlimit_nofile` in public-proxy.conf.
+   Each client connection uses 3 nginx connections (client socket, stream hop,
+   http), and each reply in the reply store uses 1 more file.
+
 ## Capacity metrics
 
 `scripts/capacity-metrics.sh` writes /var/lib/node-exporter/textfile/capacity.prom
@@ -320,13 +370,14 @@ hold counts only: client IPs stay inside the script.
 
 | Metric | Labels | Meaning |
 |---|---|---|
-| `capacity_rpc_connections` | server (restricted, unrestricted), source (public, onion, gateway, nginx, blackbox, rpc_proxy, other_private) | established RPC sockets |
-| `capacity_rpc_limit` | kind (total, public_ip, private_ip) | the caps from the monerod command line |
-| `capacity_rpc_public_ips`, `capacity_rpc_public_max_per_ip`, `capacity_rpc_public_ips_at_cap` | server | public IPs, the busiest IP, the IPs at the cap |
-| `capacity_rpc_churn_ips` | server | public IPs with 4 or more TIME-WAIT sockets: monerod closed them in the last minute |
-| `capacity_rpc_timewait_max_per_ip` | server, class | the most TIME-WAIT sockets of one IP |
+| `capacity_rpc_connections` | server (restricted, unrestricted), source (public, public_proxy, onion, gateway, nginx, blackbox, rpc_proxy, other_private) | established RPC sockets at monerod. public_proxy and onion are the pools; public stays near 0 (clients reach monerod only through public-proxy) |
+| `capacity_rpc_limit` | kind (total, public_ip, private_ip) | the caps from the monerod command line. public-proxy.conf mirrors public_ip and private_ip |
+| `capacity_rpc_public_ips`, `capacity_rpc_public_max_per_ip`, `capacity_rpc_public_ips_at_cap` | server | public client IPs at public-proxy, the busiest IP, the IPs at the cap (read from public-proxy, not monerod) |
+| `capacity_rpc_churn_ips` | server | public client IPs with 4 or more TIME-WAIT sockets: public-proxy closed them in the last minute |
+| `capacity_rpc_timewait_max_per_ip` | server, class | the most TIME-WAIT sockets of one IP (public from public-proxy, private from monerod) |
 | `capacity_rpc_sockets` | server, state | RPC sockets by TCP state |
 | `capacity_p2p_connections` | direction | P2P peers in and out |
+| `capacity_public_proxy_clients` | | clearnet client sockets at public-proxy (443 and 18089) |
 | `capacity_onion_socket_clients` | | Tor clients of the onion-proxy |
 | `capacity_netns_network_bytes_total` | container, network, direction | traffic of a container per network |
 | `capacity_netns_tcp_curr_estab`, `capacity_netns_tcp_total`, `capacity_netns_tcpext_total` | container, counter | kernel TCP counters of a container |
@@ -342,6 +393,8 @@ hold counts only: client IPs stay inside the script.
 | `capacity_container_start_time_seconds` | container | start time of the container |
 | `capacity_onion_proxy_connections` | state | open connections of nginx in onion-proxy (stub_status) |
 | `capacity_onion_proxy_accepts_total`, `capacity_onion_proxy_handled_total`, `capacity_onion_proxy_requests_total` | | accepted and handled connections, and requests (stub_status) |
+| `capacity_public_proxy_connections` | state | open connections of nginx in public-proxy (stub_status) |
+| `capacity_public_proxy_accepts_total`, `capacity_public_proxy_handled_total`, `capacity_public_proxy_requests_total` | | accepted and handled connections, and requests (stub_status) |
 | `capacity_metrics_parse_ok` | part | 1 when a part of the script passed, 0 when it failed |
 | `capacity_metrics_last_run_timestamp_seconds` | | the time of the last run |
 | `capacity_report_last_success_timestamp_seconds` | | the time of the last digest that Telegram accepted (capacity-report.prom) |
@@ -360,7 +413,7 @@ Example (the numbers are examples):
 ```
 monero-node weekly: US (2026-10-13 to 2026-10-20)
 
-RPC sockets: peak 15 of 100 (15%). Clearnet wallets: peak 12, avg 1.8, 43 socket-hours/day
+RPC sockets: peak 15 of 100 (15%). Clearnet pool: 8 of 50 (16%). Clearnet wallets: peak 12, avg 1.8, 43 socket-hours/day
 Tor sockets: peak 2 of 50 (4%). Tor clients peak 3. Tor errors 0, intro rejects 0
 Busiest public IP: 2 of 10 (20%). IP-minutes at cap: 0. Reconnecting IP-minutes: 0
 RPC threads: peak 22% (5 min), avg 1.1%. RPC probe p95 from this box: US 12 ms, EU 45 ms

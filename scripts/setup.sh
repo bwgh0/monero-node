@@ -89,9 +89,9 @@ ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp     # SSH
 ufw allow 80/tcp     # HTTP (ACME + health checks)
-ufw allow 443/tcp    # HTTPS (monerod native TLS RPC)
+ufw allow 443/tcp    # HTTPS (public-proxy, nginx TLS RPC)
 ufw allow 18080/tcp  # monerod P2P
-ufw allow 18089/tcp  # monerod restricted RPC (legacy port)
+ufw allow 18089/tcp  # public-proxy, same RPC (legacy port)
 ufw --force enable
 
 # Create app directory
@@ -131,13 +131,14 @@ else
     cp "${SCRIPT_DIR}/docker-compose.yml" "${APP_DIR}/"
     cp "${SCRIPT_DIR}/nginx.conf" "${APP_DIR}/"
     cp "${SCRIPT_DIR}/onion-proxy.conf" "${APP_DIR}/"
+    cp "${SCRIPT_DIR}/public-proxy.conf" "${APP_DIR}/"
     cp -r "${SCRIPT_DIR}/monitoring" "${SCRIPT_DIR}/scripts" "${APP_DIR}/"
 fi
 
-# Substitute domain in nginx.conf, onion-proxy.conf (the cert path) and the
-# alert rules (they tell the probes of this box from those of the other box
-# by its domain)
-sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}/onion-proxy.conf" "${APP_DIR}"/monitoring/grafana/provisioning/alerting/*.yml
+# Substitute domain in nginx.conf, onion-proxy.conf and public-proxy.conf (the
+# cert path) and the alert rules (they tell the probes of this box from those
+# of the other box by its domain)
+sed -i "s/\${DOMAIN}/${DOMAIN}/g" "${APP_DIR}/nginx.conf" "${APP_DIR}/onion-proxy.conf" "${APP_DIR}/public-proxy.conf" "${APP_DIR}"/monitoring/grafana/provisioning/alerting/*.yml
 
 # Generate initial Let's Encrypt cert (monerod loads it for native TLS). The
 # cert is in the certbot-conf volume, so look for it there. Let's Encrypt
