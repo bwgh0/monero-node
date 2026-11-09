@@ -123,7 +123,7 @@ services:
   certbot:
     # certbot with the Route 53 DNS plugin, pinned by the digest of its
     # multi-arch index. scripts/setup.sh also takes this image from here.
-    image: certbot/dns-route53:v5.8.0@sha256:38fdfaed25f1e2554b22b835d257756afcfe3acacb8f943ec0884c251e561130
+    image: certbot/dns-route53:v5.9.0@sha256:2ba9a556fab15b5d3226a8c081108f8e27bed02794f4e54257fc8358cc053c1d
     container_name: certbot
     restart: unless-stopped
     volumes:
