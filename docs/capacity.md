@@ -20,8 +20,8 @@ Numbers from the capacity audit of October 2026, for one box.
 | public-proxy reply store | 1 GiB tmpfs (`/var/cache/nginx`) | docker-compose.yml | nginx stops the reply in the middle ("No space left on device" in its log) | about 40 replies of 25 MB that a slow client still reads at the same time | 0 |
 | onion-proxy reply store | 1 GiB tmpfs (`/var/cache/nginx`) | docker-compose.yml | nginx stops the reply in the middle ("No space left on device" in its log) | about 40 replies of 25 MB that Tor still sends at the same time | 0 |
 | RPC worker threads | 2 per server | fixed in the monerod build (`daemon/rpc.h`) | requests queue, and latency rises for all users | about 10 wallets that catch up at the same time | 2.6% of one thread |
-| Included traffic | 3 TiB outbound per month (cpx31 in ash, hcloud server describe). Inbound is free. | server plan | overage at $1.20 per TB (cost only) | about 3 times the egress of October 2026: about 5,000 more daily users, fewer with many restores | about 30% (about 1 TB per month) |
-| Disk | 150 GB filesystem | server type (CPX31) | monerod stops when the disk is full | 80% about mid-December 2026; 85% about May 2027 | 78% |
+| Included traffic | 3 TiB outbound per month on US (cpx31 in ash) and 20 TiB on EU (cpx32 in nbg1), hcloud server describe. Inbound is free. | server plan | overage at $1.20 per TB (cost only) | about 3 times the egress of October 2026: about 5,000 more daily users, fewer with many restores | about 30% (about 1 TB per month) |
+| Disk | 150 GB filesystem | server type (CPX31 on US, CPX32 on EU) | monerod stops when the disk is full | 80% about mid-December 2026; 85% about May 2027 | 78% |
 | monerod CPU | 2 cores (cgroup) | compose `cpus: 2.0` | throttling, slow RPC | far | under 8% |
 | monerod memory | 4 GiB (cgroup) | compose `mem_limit: 4g` | OOM kill and restart | far | 334 MB anonymous |
 | monerod open files | 1024 soft | Docker default | accept fails | only after the socket caps go up | 111 |
@@ -246,13 +246,15 @@ locations (hcloud server describe).
 1. Split the egress: P2P (`monero_net_tx_bytes`), clearnet RPC and Tor
    (`capacity_netns_network_bytes_total`).
 2. For P2P cost, lower `--limit-rate-up`. For RPC growth, accept the cost or
-   move the box to an EU location (20 TB included).
+   move the box to an EU location (20 TB included). The EU box moved to
+   nbg1 on 2026-11-03.
 
 The included traffic is 3 TiB (3298534883328 bytes) unless you set it. That
-is the amount of a cpx31 in ash (hcloud server describe), the plan of both
-boxes. To change it, add `INCLUDED_TRAFFIC_BYTES=<bytes>` (digits only) to
-the .env of the box. scripts/capacity-metrics.sh reads only this key of
-.env, at its next run.
+is the amount of a cpx31 in ash (hcloud server describe), the plan of the US
+box. The EU box is a cpx32 in nbg1 with 20 TiB, so its .env sets
+`INCLUDED_TRAFFIC_BYTES=21990232555520`. To change it, add
+`INCLUDED_TRAFFIC_BYTES=<bytes>` (digits only) to the .env of the box.
+scripts/capacity-metrics.sh reads only this key of .env, at its next run.
 
 ### OOM Kill
 
