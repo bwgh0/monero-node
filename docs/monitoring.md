@@ -9,7 +9,6 @@ messages look like, and how the GitHub watchdog, its clock and Dependabot work.
 | Watcher | Runs on | Watches | Sends |
 |---|---|---|---|
 | Prometheus and Grafana | each box | its own services, the RPC, onion, cert and Grafana of the other box, and the watchdog runs | Telegram, through the contact point of the box |
-| Weekly digest | each box (cron, Monday 13:00 UTC) | the capacity numbers of the box | one Telegram message per box per week |
 | Watchdog | GitHub Actions, every 10 minutes, started by an AWS EventBridge rule | both boxes from outside | Telegram, only for what the boxes cannot send |
 
 Each box probes both boxes (monitoring/prometheus.yml). Every probe series has
@@ -341,18 +340,12 @@ the watchdog stop at the same time, no message goes out.
   prints the message and sends nothing. The onion checks need a Tor SOCKS
   proxy on 127.0.0.1:9050, else they fail.
 
-## Weekly digest
+## Capacity report
 
-`scripts/capacity-report.py` runs from cron on each box, every Monday at 13:00
-UTC. capacity.md tells how to read it. It runs on the box because:
-
-- It reads the local Prometheus of the box.
-- It uses the Telegram keys of the box .env. It needs no new secret and no SSH key.
-- It works when GitHub is down.
-
-The digest is also a heartbeat. When it does not arrive on Monday, the alert
-path of that box is broken: check Grafana and the cron on the box. The rule
-Capacity Digest Missing fires when the digest did not finish in 8 days.
+`scripts/capacity-report.py` prints the capacity numbers of one box for the
+last 7 days. No cron runs it. To print it, run
+`python3 /opt/monero-node/scripts/capacity-report.py --dry-run` on the box.
+capacity.md tells how to read it.
 
 ## Dependabot
 

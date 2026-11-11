@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""Weekly capacity digest of this box, sent to Telegram.
+"""Capacity report of this box for the last 7 days.
 
-Cron runs it on each box on Monday at 13:00 UTC (scripts/capacity.cron). It
-reads the local Prometheus, adds one row to the history file, finds how many
-weeks are left before each limit reaches its warn level and sends one plain
-text message. docs/capacity.md tells how to read the digest.
-
-The digest runs on the box, not in GitHub Actions: it uses the local
-Prometheus and the Telegram keys that Grafana already has in .env, it needs
-no new secret and no SSH key, and it works when GitHub is down. Because it
-uses the same Telegram bot as the alerts, it is also a weekly heartbeat of
-the alert path.
+A person runs it by hand on the box. No cron runs it. It reads the local
+Prometheus, finds how many weeks are left before each limit reaches its warn
+level and prints one plain text message. docs/capacity.md tells how to read
+the report.
 
 Usage: capacity-report.py [--dry-run]
-  --dry-run  print the message. Send nothing, and write no history row and
-             no success metric.
+  --dry-run  print the message. Send nothing and write no history row.
+  Without the flag, it also sends the message to Telegram through the bot of
+  the alerts (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env) and adds one
+  row to the history file.
 
 For tests: PROM_URL (query this URL directly, not through nsenter),
-TELEGRAM_API, ENV_FILE, CAPACITY_STATE_DIR, TEXTFILE_DIR and NOW (a Unix
-time for the report).
+TELEGRAM_API, ENV_FILE, CAPACITY_STATE_DIR and NOW (a Unix time for the
+report).
 """
 
 import argparse
@@ -36,7 +32,6 @@ import urllib.request
 
 ENV_FILE = os.environ.get("ENV_FILE", "/opt/monero-node/.env")
 STATE_DIR = os.environ.get("CAPACITY_STATE_DIR", "/var/lib/monero-node-capacity")
-TEXTFILE_DIR = os.environ.get("TEXTFILE_DIR", "/var/lib/node-exporter/textfile")
 TELEGRAM_API = os.environ.get("TELEGRAM_API", "https://api.telegram.org")
 PROM_URL = os.environ.get("PROM_URL", "")
 HISTORY = os.path.join(STATE_DIR, "history.csv")
@@ -119,7 +114,7 @@ class Prometheus:
         return r.stdout
 
     def query(self, expr, strict=False):
-        """Returns the result vector. strict: a failure stops the digest."""
+        """Returns the result vector. strict: a failure stops the report."""
         try:
             body = json.loads(self._get(expr))
             if body.get("status") != "success":
@@ -405,10 +400,6 @@ def message(d, rows, prom_errors):
             lines.append("Change vs last week: " + ", ".join(ch))
     if prom_errors:
         lines.append(f"{prom_errors} queries failed. Their lines show n/a.")
-    lines.append("")
-    lines.append(f"Heartbeat: the {box} box sends this digest every Monday at 13:00 UTC through the "
-                 "Telegram bot of its alerts. When it does not arrive, the alert path of this box "
-                 "is broken. Check Grafana and the cron on the box.")
     text = "\n".join(lines)
     return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX - 2] + "\n…"
 
@@ -428,19 +419,8 @@ def send(text, token, chat):
         raise Failure("Telegram did not accept the message")
 
 
-def write_success(now):
-    os.makedirs(TEXTFILE_DIR, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=TEXTFILE_DIR, prefix=".capacity-report.")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("# HELP capacity_report_last_success_timestamp_seconds Time of the last weekly digest that Telegram accepted.\n")
-        f.write("# TYPE capacity_report_last_success_timestamp_seconds gauge\n")
-        f.write(f"capacity_report_last_success_timestamp_seconds {int(now)}\n")
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, os.path.join(TEXTFILE_DIR, "capacity-report.prom"))
-
-
 def main():
-    ap = argparse.ArgumentParser(description="Weekly capacity digest of this box.")
+    ap = argparse.ArgumentParser(description="Capacity report of this box for the last 7 days.")
     ap.add_argument("--dry-run", action="store_true", help="print the message, send nothing, write nothing")
     args = ap.parse_args()
     now = float(os.environ.get("NOW") or datetime.datetime.now(datetime.timezone.utc).timestamp())
@@ -462,7 +442,7 @@ def main():
         p.query("up", strict=True)
         d = derive(collect(p, box), now)
     except Failure as e:
-        text = f"monero-node weekly: {box}: digest failed ({e})"
+        text = f"monero-node weekly: {box}: report failed ({e})"
         print(text, file=sys.stderr)
         if not args.dry_run:
             try:
@@ -482,7 +462,6 @@ def main():
         print(f"capacity-report: {e}", file=sys.stderr)
         return 1
     write_history(rows)
-    write_success(now)
     return 0
 
 
