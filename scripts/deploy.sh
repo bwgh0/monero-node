@@ -448,11 +448,14 @@ host_setup() {
         install -d -m 755 /var/lib/node-exporter/textfile
         install -m 644 scripts/docker-metrics.cron /etc/cron.d/monero-node-docker-metrics
     fi
-    # Capacity metrics and the weekly digest (docs/capacity.md)
+    # Capacity metrics (docs/capacity.md)
     if [[ -f scripts/capacity.cron ]]; then
         install -d -m 755 /var/lib/node-exporter/textfile /var/lib/monero-node-capacity
         install -m 644 scripts/capacity.cron /etc/cron.d/monero-node-capacity
     fi
+    # The old weekly digest wrote this file. No rule reads it now. Remove
+    # it, so node-exporter stops exporting a stale value.
+    rm -f /var/lib/node-exporter/textfile/capacity-report.prom
     # The time of the last good watchdog run, for Watchdog Silent
     # (docs/monitoring.md). One run now, so the rule has data when Grafana
     # loads it.

@@ -418,7 +418,7 @@ services:
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      # 6 months of history for the weekly capacity digest. About 110 MB per
+      # 6 months of history for the capacity dashboards. About 110 MB per
       # 30 days today, so the size cap is only a guard.
       - --storage.tsdb.retention.time=180d
       - --storage.tsdb.retention.size=2GB

@@ -184,7 +184,7 @@ echo "==> Installing docker-metrics cron..."
 install -d -m 755 /var/lib/node-exporter/textfile
 install -m 644 "${SCRIPT_DIR}/scripts/docker-metrics.cron" /etc/cron.d/monero-node-docker-metrics
 
-# Capacity metrics every minute and the weekly digest (docs/capacity.md)
+# Capacity metrics every minute (docs/capacity.md)
 echo "==> Installing capacity cron..."
 install -d -m 755 /var/lib/monero-node-capacity
 install -m 644 "${SCRIPT_DIR}/scripts/capacity.cron" /etc/cron.d/monero-node-capacity

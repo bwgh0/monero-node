@@ -1,7 +1,7 @@
 # Capacity
 
 This page lists the limits of each box, the capacity alerts and their
-runbooks, the capacity metrics and the weekly digest. The goal: know about a
+runbooks, the capacity metrics and the capacity report. The goal: know about a
 limit before users meet it. [monitoring.md](monitoring.md) tells which box
 sends which alert.
 
@@ -107,7 +107,6 @@ value of now.
 | OOM Kill | the kernel killed a process for lack of memory | 0s | critical |
 | Capacity Metrics Stale | the capacity file is older than 5 minutes | 5m | warning |
 | Capacity Metrics Broken | a part of the capacity script failed | 15m | warning |
-| Capacity Digest Missing | the weekly digest did not finish in 8 days | 1h | warning |
 | Egress Rate High | the host sends at 5 times the pace of its included traffic | 30m | warning |
 | monerod CPU High | monerod uses more than 70% of its CPU limit | 30m | warning |
 | monerod CPU Throttled | the cgroup throttles monerod in more than 10% of periods | 15m | warning |
@@ -276,14 +275,6 @@ The capacity alerts are blind.
 2. Check /etc/cron.d/monero-node-capacity, the textfile directory and the
    `part` label of the failed part.
 
-### Capacity Digest Missing
-
-The weekly digest did not finish in 8 days.
-
-1. Run `python3 /opt/monero-node/scripts/capacity-report.py --dry-run`.
-2. Check the cron entry and the Telegram keys in .env. Check that the keys
-   exist, and keep their values out of logs.
-
 ### Egress Rate High
 
 For 30 minutes, the host sends at a pace of 5 times its included traffic
@@ -402,16 +393,23 @@ hold counts only: client IPs stay inside the script.
 | `capacity_public_proxy_accepts_total`, `capacity_public_proxy_handled_total`, `capacity_public_proxy_requests_total` | | accepted and handled connections, and requests (stub_status) |
 | `capacity_metrics_parse_ok` | part | 1 when a part of the script passed, 0 when it failed |
 | `capacity_metrics_last_run_timestamp_seconds` | | the time of the last run |
-| `capacity_report_last_success_timestamp_seconds` | | the time of the last digest that Telegram accepted (capacity-report.prom) |
 
 The script also copies the `tor_hs_*` metrics from the MetricsPort of Tor
 (loopback in the tor container) into the file, with the onion name removed.
 
-## Weekly digest
+## Capacity report
 
-`scripts/capacity-report.py` runs on each box every Monday at 13:00 UTC and
-sends one Telegram message about that box. monitoring.md tells why it runs on
-the box. `--dry-run` prints the message and sends nothing.
+`scripts/capacity-report.py` reads the local Prometheus of a box and makes one
+report about that box for the last 7 days. No cron runs it. To print the
+report, run this on the box:
+
+```
+python3 /opt/monero-node/scripts/capacity-report.py --dry-run
+```
+
+`--dry-run` prints the report and sends nothing. Without the flag, the script
+also sends the report to Telegram through the bot of the alerts and adds a row
+to the history file.
 
 Example (the numbers are examples):
 
@@ -425,8 +423,6 @@ RPC threads: peak 22% (5 min), avg 1.1%. RPC probe p95 from this box: US 12 ms, 
 ...
 Weeks to warn level (80% of the limit): sockets 46, Tor flat, per-IP flat, RPC threads flat, traffic flat
 Change vs last week: socket peak +2, egress +4%
-
-Heartbeat: the US box sends this digest every Monday at 13:00 UTC ...
 ```
 
 How to read it:
@@ -440,8 +436,7 @@ How to read it:
 - "Weeks to warn level" fits a line to the last 3 to 8 weeks and tells when a
   value reaches 80% of its limit. "now" means it is there. "flat" means no
   growth, or more than 2 years away. A new box shows "needs 3 weeks of data".
-- When the digest does not arrive on Monday, the alert path of that box is
-  broken. Check Grafana and the cron on the box.
 
-Each run adds one row to /var/lib/monero-node-capacity/history.csv (the last
-104 weeks). A second run on the same day replaces the row of that day.
+Each run without `--dry-run` adds one row to
+/var/lib/monero-node-capacity/history.csv (the last 104 weeks). A second run
+on the same day replaces the row of that day.
