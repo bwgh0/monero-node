@@ -100,7 +100,6 @@ value of now.
 | Public Proxy Pool High / Critical | public-proxy pool sockets above 50% / 80% of the private-IP cap | 10m / 5m | warning / critical |
 | Onion RPC Connections High / Critical | onion-proxy sockets above 50% / 80% of the private-IP cap | 10m / 5m | warning / critical |
 | Public IP At RPC Cap | a public client IP holds as many sockets as the public-proxy per-IP cap | 15m | warning |
-| RPC Clients Reconnecting | a public client IP has 4 or more sockets that public-proxy closed in the last minute | 10m | warning |
 | RPC Busy High / Critical | the 2 restricted RPC threads are busy above 50% / 80% of the time | 15m / 10m | warning / critical |
 | Monthly Traffic High | the month will use more than 80% of the included egress (from day 4) | 1h | warning |
 | Included Traffic Used Up | the month used more than the included egress | 1h | warning |
@@ -203,20 +202,6 @@ socket. The refusal ends at nginx, so it cannot lock out monerod.
    not abuse.
 3. This no longer needs a monerod restart. A shared IP at the cap is one busy
    IP, not a box-wide outage.
-
-### RPC Clients Reconnecting
-
-A public client IP has 4 or more sockets that public-proxy closed in the last
-minute, for 10 minutes. This is the pattern of a wallet behind a shared IP at
-the per-IP cap that retries, or of a downgraded wallet (plain HTTP to the TLS
-port every 10 s).
-
-1. Check Public IP At RPC Cap and Public Proxy Pool. A refusal comes first.
-2. Fix the cause (the per-IP cap). The wallet recovers when the user reopens
-   it or pulls to refresh. The reconnects end at public-proxy, not monerod.
-
-The probes of the other box make about 2 TIME-WAIT sockets per minute, below
-the level of 4.
 
 ### RPC Busy High, RPC Busy Critical
 
@@ -431,8 +416,10 @@ How to read it:
 
 - The socket peak and the socket-hours rise with the users. These two lines
   tell how close the box is to the limit.
-- IP-minutes at the cap and reconnecting IP-minutes above 0 mean that users
-  meet the per-IP cap. Raise it.
+- IP-minutes at the cap above 0 mean that users meet the per-IP cap. Raise it.
+- Reconnecting IP-minutes come mostly from a wallet with a wrong setting
+  (plain HTTP to the TLS port, a new socket every few seconds). Only its owner
+  can fix it, so no alert watches this number.
 - Most new connections on 443 are Route 53 health checks (about 46,000 per
   day). The rest is wallet sessions and iOS probes.
 - "Weeks to warn level" fits a line to the last 3 to 8 weeks and tells when a

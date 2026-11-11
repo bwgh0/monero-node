@@ -13,9 +13,14 @@ apiVersion: 1
 
 # Grafana keeps a provisioned rule after it goes out of this file, so delete
 # the old rules here. Capacity Digest Missing went out with the weekly digest.
+# RPC Clients Reconnecting went out on 2026-11-11: it fired for one wallet
+# with a wrong setting (plain HTTP to the TLS port), which only its owner can
+# fix. Public IP At RPC Cap still covers wallets refused at the per-IP cap.
 deleteRules:
   - orgId: 1
     uid: alert-digest-missing
+  - orgId: 1
+    uid: alert-rpc-churn
 
 groups:
   - orgId: 1
@@ -335,50 +340,6 @@ groups:
           affected: "Clearnet RPC users behind that IP (VPN, carrier NAT). public-proxy refuses their next socket."
           first_step: "Run grep -E '^capacity_rpc_(public|limit)' /var/lib/node-exporter/textfile/capacity.prom."
           description: "A flat line at the cap means a shared IP or one busy client. public-proxy enforces the per-IP cap now, so one IP can no longer lock out monerod. A refused socket is a wallet behind a busy shared IP. See Public IP At RPC Cap in docs/capacity.md."
-        labels:
-          severity: warning
-
-      - uid: alert-rpc-churn
-        title: RPC Clients Reconnecting
-        condition: C
-        noDataState: OK
-        execErrState: KeepLast
-        data:
-          - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
-            datasourceUid: PBFA97CFB590B2093
-            model:
-              # Client IPs with 4 or more sockets that public-proxy closed in
-              # the last minute (read from the proxy by public-proxy-part).
-              expr: max(capacity_rpc_churn_ips{server="restricted"})
-              instant: true
-              range: false
-              refId: A
-          - refId: B
-            datasourceUid: __expr__
-            model:
-              type: reduce
-              expression: A
-              reducer: last
-              refId: B
-          - refId: C
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: B
-              conditions:
-                - evaluator:
-                    type: gt
-                    params: [0]
-              refId: C
-        for: 10m
-        annotations:
-          summary: '{{ with .Values.B }}{{ printf "%.0f" .Value }}{{ else }}An unknown number of{{ end }} public IP(s) connect to the RPC again and again'
-          affected: "Clearnet RPC users behind those IPs. Their wallets do not sync."
-          first_step: "Look for a Public IP At RPC Cap or Public Proxy Pool alert first. A refusal comes before the reconnects."
-          description: "This is the pattern of a wallet behind a shared IP at the per-IP cap that retries, or of a wallet that sends plain HTTP to the TLS port every 10 s. The reconnects end at public-proxy now, not monerod. See RPC Clients Reconnecting in docs/capacity.md."
         labels:
           severity: warning
 
