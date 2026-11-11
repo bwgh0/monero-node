@@ -278,10 +278,14 @@ The capacity alerts are blind.
 
 ### Capacity Digest Missing
 
-The weekly digest did not finish in 8 days.
+The weekly digest did not finish in 8 days. The cron runs the digest on
+Monday at 13:00 UTC. After a failed run, it tries again each hour until 18:00
+UTC. So this alert means that all the runs of one Monday failed.
 
-1. Run `python3 /opt/monero-node/scripts/capacity-report.py --dry-run`.
-2. Check the cron entry and the Telegram keys in .env. Check that the keys
+1. Read the error of the failed runs:
+   `journalctl -t capacity-report --since -8d`.
+2. Run `python3 /opt/monero-node/scripts/capacity-report.py --dry-run`.
+3. Check the cron entry and the Telegram keys in .env. Check that the keys
    exist, and keep their values out of logs.
 
 ### Egress Rate High
@@ -410,8 +414,11 @@ The script also copies the `tor_hs_*` metrics from the MetricsPort of Tor
 ## Weekly digest
 
 `scripts/capacity-report.py` runs on each box every Monday at 13:00 UTC and
-sends one Telegram message about that box. monitoring.md tells why it runs on
-the box. `--dry-run` prints the message and sends nothing.
+sends one Telegram message about that box. After a failed run, the cron tries
+again each hour until 18:00 UTC (`--if-due` skips the run when the last digest
+is less than 6 days old). The output goes to the journal:
+`journalctl -t capacity-report`. monitoring.md tells why it runs on the box.
+`--dry-run` prints the message and sends nothing.
 
 Example (the numbers are examples):
 
@@ -440,8 +447,8 @@ How to read it:
 - "Weeks to warn level" fits a line to the last 3 to 8 weeks and tells when a
   value reaches 80% of its limit. "now" means it is there. "flat" means no
   growth, or more than 2 years away. A new box shows "needs 3 weeks of data".
-- When the digest does not arrive on Monday, the alert path of that box is
-  broken. Check Grafana and the cron on the box.
+- When the digest does not arrive on Monday by 18:00 UTC, the alert path of
+  that box is broken. Check Grafana and the cron on the box.
 
 Each run adds one row to /var/lib/monero-node-capacity/history.csv (the last
 104 weeks). A second run on the same day replaces the row of that day.

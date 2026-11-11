@@ -9,7 +9,7 @@ messages look like, and how the GitHub watchdog, its clock and Dependabot work.
 | Watcher | Runs on | Watches | Sends |
 |---|---|---|---|
 | Prometheus and Grafana | each box | its own services, the RPC, onion, cert and Grafana of the other box, and the watchdog runs | Telegram, through the contact point of the box |
-| Weekly digest | each box (cron, Monday 13:00 UTC) | the capacity numbers of the box | one Telegram message per box per week |
+| Weekly digest | each box (cron, Monday 13:00 UTC, again each hour to 18:00 after a failure) | the capacity numbers of the box | one Telegram message per box per week |
 | Watchdog | GitHub Actions, every 10 minutes, started by an AWS EventBridge rule | both boxes from outside | Telegram, only for what the boxes cannot send |
 
 Each box probes both boxes (monitoring/prometheus.yml). Every probe series has
@@ -344,15 +344,18 @@ the watchdog stop at the same time, no message goes out.
 ## Weekly digest
 
 `scripts/capacity-report.py` runs from cron on each box, every Monday at 13:00
-UTC. capacity.md tells how to read it. It runs on the box because:
+UTC. After a failed run, the cron tries again each hour until 18:00 UTC, and
+`journalctl -t capacity-report` shows the reason. capacity.md tells how to
+read it. It runs on the box because:
 
 - It reads the local Prometheus of the box.
 - It uses the Telegram keys of the box .env. It needs no new secret and no SSH key.
 - It works when GitHub is down.
 
-The digest is also a heartbeat. When it does not arrive on Monday, the alert
-path of that box is broken: check Grafana and the cron on the box. The rule
-Capacity Digest Missing fires when the digest did not finish in 8 days.
+The digest is also a heartbeat. When it does not arrive on Monday by 18:00
+UTC, the alert path of that box is broken: check Grafana and the cron on the
+box. The rule Capacity Digest Missing fires when the digest did not finish in
+8 days.
 
 ## Dependabot
 

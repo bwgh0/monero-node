@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Weekly capacity digest of this box, sent to Telegram.
 
-Cron runs it on each box on Monday at 13:00 UTC (scripts/capacity.cron). It
+Cron runs it on each box on Monday at 13:00 UTC (scripts/capacity.cron).
+After a failed run, cron tries again each hour until 18:00 UTC. The script
 reads the local Prometheus, adds one row to the history file, finds how many
 weeks are left before each limit reaches its warn level and sends one plain
 text message. docs/capacity.md tells how to read the digest.
@@ -12,9 +13,12 @@ no new secret and no SSH key, and it works when GitHub is down. Because it
 uses the same Telegram bot as the alerts, it is also a weekly heartbeat of
 the alert path.
 
-Usage: capacity-report.py [--dry-run]
+Usage: capacity-report.py [--dry-run] [--if-due]
   --dry-run  print the message. Send nothing, and write no history row and
              no success metric.
+  --if-due   do nothing and exit 0 when the last digest that Telegram
+             accepted is less than 6 days old (capacity-report.prom). Cron
+             uses it to try again each hour after a failed run.
 
 For tests: PROM_URL (query this URL directly, not through nsenter),
 TELEGRAM_API, ENV_FILE, CAPACITY_STATE_DIR, TEXTFILE_DIR and NOW (a Unix
@@ -42,6 +46,7 @@ PROM_URL = os.environ.get("PROM_URL", "")
 HISTORY = os.path.join(STATE_DIR, "history.csv")
 HISTORY_ROWS = 104
 TELEGRAM_MAX = 4096
+DUE_AFTER = 6 * 86400
 
 # The monero-exporter calls these methods on the unrestricted RPC. They do
 # not load the 2 threads of the public RPC (same list as capacity-rules.yml).
@@ -439,11 +444,34 @@ def write_success(now):
     os.replace(tmp, os.path.join(TEXTFILE_DIR, "capacity-report.prom"))
 
 
+def last_success():
+    """Returns the time of the last digest from capacity-report.prom, or None."""
+    try:
+        with open(os.path.join(TEXTFILE_DIR, "capacity-report.prom"), encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == "capacity_report_last_success_timestamp_seconds":
+                    v = float(parts[1])
+                    return v if math.isfinite(v) else None
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Weekly capacity digest of this box.")
     ap.add_argument("--dry-run", action="store_true", help="print the message, send nothing, write nothing")
+    ap.add_argument("--if-due", action="store_true", help="do nothing when the last digest is less than 6 days old")
     args = ap.parse_args()
     now = float(os.environ.get("NOW") or datetime.datetime.now(datetime.timezone.utc).timestamp())
+
+    if args.if_due:
+        last = last_success()
+        # A time in the future is a bad value: the digest is due.
+        if last is not None and 0 <= now - last < DUE_AFTER:
+            when = datetime.datetime.fromtimestamp(last, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            print(f"capacity-report: not due, last digest {when}")
+            return 0
 
     try:
         env = read_env(ENV_FILE, {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DOMAIN"})
