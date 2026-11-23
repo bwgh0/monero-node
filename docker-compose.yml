@@ -146,7 +146,7 @@ services:
     # Runs as 104:107. That uid owns the onion keys in tor-keys (the old goldy
     # image created them). Never change HiddenServiceDir: the .onion address
     # comes from the keys in that directory.
-    image: btcpayserver/tor:0.4.9.14@sha256:9bae23c1156698b21eb04663b9f1583d08e370374cf4c2ce5c78363b2ede46aa
+    image: btcpayserver/tor:0.4.9.17@sha256:446afeb83d5e5a139f07bc50e68af06049c64fdb7c7e284a772adc1d489e40df
     container_name: tor
     restart: unless-stopped
     user: "104:107"
@@ -352,7 +352,7 @@ services:
   tor-client:
     # SOCKS proxy for the onion probes in blackbox. It is separate from the
     # tor service, so a stuck onion service cannot hide its own outage.
-    image: btcpayserver/tor:0.4.9.14@sha256:9bae23c1156698b21eb04663b9f1583d08e370374cf4c2ce5c78363b2ede46aa
+    image: btcpayserver/tor:0.4.9.17@sha256:446afeb83d5e5a139f07bc50e68af06049c64fdb7c7e284a772adc1d489e40df
     container_name: tor-client
     restart: unless-stopped
     user: "104:107"
